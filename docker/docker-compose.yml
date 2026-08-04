@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  mt5-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: mt5-bridge
+    ports:
+      - "5000:5000" # REST API
+      - "8080:8080" # Web VNC
+    volumes:
+      - mt5_data:/root/.wine/drive_c/Program Files/MetaTrader 5
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+
+volumes:
+  mt5_data:

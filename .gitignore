@@ -1,0 +1,96 @@
+# ============================================
+# Projeto Córtex - .gitignore
+# ============================================
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Logs e status runtime
+dashboard_log.txt
+engine_log.txt
+status.txt
+cortex-ia.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*.class
+*.pyo
+*.pyd
+*.so
+
+# Distribuição / Build
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+*.manifest
+*.spec
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# Logs
+logs/
+*.log
+
+# Banco de dados e estado runtime
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/simulator_state.json
+
+# Modelos ML
+models/*.onnx
+models/*.pt
+models/*.pth
+models/*.bin
+models/*.h5
+
+# Sistema operacional
+Thumbs.db
+.DS_Store
+desktop.ini
+ehthumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy / type checkers
+.mypy_cache/
+.pytype/
+.pyre/
+
+# Dados temporários
+tmp/
+temp/
+*.tmp
+*.bak
+
+# MetaTrader
+*.ex5
+*.set

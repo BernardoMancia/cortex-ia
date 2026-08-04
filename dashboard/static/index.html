@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Córtex IA - Intelligence Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <header class="header glass-panel">
+            <div class="logo">
+                <div class="pulse-indicator"></div>
+                <h1>CÓRTEX <span>IA</span></h1>
+            </div>
+            <div class="status-badges">
+                <span class="badge online">ONLINE</span>
+                <span class="badge mode">SIMULATION MODE</span>
+                <div class="production-balance" style="margin-left: 15px; font-size: 0.9em; color: #a0aec0; border-left: 1px solid #4a5568; padding-left: 15px;">
+                    Prod: <strong id="prod-balance" style="color: #48bb78;">R$ --,--</strong>
+                </div>
+            </div>
+        </header>
+
+        <main class="grid-layout">
+            <section class="panel glass-panel summary-panel">
+                <h2>Patrimônio</h2>
+                <div class="metrics">
+                    <div class="metric">
+                        <span class="label">Total (R$)</span>
+                        <span class="value" id="val-equity">R$ 0,00</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Caixa Livre (R$)</span>
+                        <span class="value" id="val-balance">R$ 0,00</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel glass-panel positions-panel">
+                <h2>Posições Abertas</h2>
+                <div class="table-container">
+                    <table id="positions-table">
+                        <thead>
+                            <tr>
+                                <th>Ativo</th>
+                                <th>Qtd</th>
+                                <th>Preço Entrada</th>
+                                <th>Preço Atual</th>
+                                <th>Stop Loss</th>
+                                <th>P&L</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Injetado via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="panel glass-panel decisions-panel">
+                <h2>Últimas Decisões do Cérebro</h2>
+                <div class="timeline" id="decisions-timeline">
+                    <!-- Injetado via JS -->
+                </div>
+            </section>
+
+            <section class="panel glass-panel logs-panel">
+                <h2>Terminal (Tempo Real)</h2>
+                <div class="terminal" id="log-terminal">
+                    <!-- Injetado via WebSocket -->
+                </div>
+            </section>
+        </main>
+    </div>
+    
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
