@@ -5,12 +5,16 @@ Fornece helpers para formatação monetária, manipulação de datas,
 cálculos financeiros e conversão de tickers.
 """
 
-from datetime import datetime ,timezone ,timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Final
 
-BRT :Final [timezone ]=timezone (timedelta (hours =-3 ),name ="BRT")
+# ────────────────────────────────────────────────────────────
+# Timezone BRT (UTC-3)
+# ────────────────────────────────────────────────────────────
+BRT: Final[timezone] = timezone(timedelta(hours=-3), name="BRT")
 
-def format_brl (value :float )->str :
+
+def format_brl(value: float) -> str:
     """
     Formata um valor numérico para o padrão monetário brasileiro.
 
@@ -29,20 +33,22 @@ def format_brl (value :float )->str :
         >>> format_brl(0)
         'R$ 0,00'
     """
-    formatted =f"{abs (value ):,.2f}".replace (',','X').replace ('.',',').replace ('X','.')
-    sign ='-'if value <0 else ''
-    return f"{sign }R$ {formatted }"
+    formatted = f"{abs(value):,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+    sign = '-' if value < 0 else ''
+    return f"{sign}R$ {formatted}"
 
-def get_brt_now ()->datetime :
+
+def get_brt_now() -> datetime:
     """
     Retorna o datetime atual com timezone BRT (UTC-3).
 
     Returns:
         Datetime timezone-aware no horário de Brasília.
     """
-    return datetime .now (tz =BRT )
+    return datetime.now(tz=BRT)
 
-def percentage_change (old :float ,new :float )->float :
+
+def percentage_change(old: float, new: float) -> float:
     """
     Calcula a variação percentual entre dois valores.
 
@@ -61,11 +67,12 @@ def percentage_change (old :float ,new :float )->float :
         >>> percentage_change(200.0, 180.0)
         -10.0
     """
-    if old ==0.0 :
+    if old == 0.0:
         return 0.0
-    return ((new -old )/old )*100.0
+    return ((new - old) / old) * 100.0
 
-def safe_division (a :float ,b :float ,default :float =0.0 )->float :
+
+def safe_division(a: float, b: float, default: float = 0.0) -> float:
     """
     Divisão segura que retorna um valor padrão ao dividir por zero.
 
@@ -86,11 +93,12 @@ def safe_division (a :float ,b :float ,default :float =0.0 )->float :
         >>> safe_division(10.0, 0.0, default=-1.0)
         -1.0
     """
-    if b ==0.0 :
+    if b == 0.0:
         return default
-    return a /b
+    return a / b
 
-def ensure_fractional_ticker (ticker :str )->str :
+
+def ensure_fractional_ticker(ticker: str) -> str:
     """
     Garante que o ticker tenha o sufixo 'F' para mercado fracionário.
 
@@ -112,12 +120,13 @@ def ensure_fractional_ticker (ticker :str )->str :
         >>> ensure_fractional_ticker('BPAC11')
         'BPAC11F'
     """
-    ticker =ticker .strip ().upper ()
-    if not ticker .endswith ("F"):
-        return f"{ticker }F"
+    ticker = ticker.strip().upper()
+    if not ticker.endswith("F"):
+        return f"{ticker}F"
     return ticker
 
-def to_yfinance_ticker (ticker :str )->str :
+
+def to_yfinance_ticker(ticker: str) -> str:
     """
     Converte ticker da B3 para o formato do Yahoo Finance.
 
@@ -139,19 +148,21 @@ def to_yfinance_ticker (ticker :str )->str :
         >>> to_yfinance_ticker('BPAC11')
         'BPAC11.SA'
     """
-    ticker =ticker .strip ().upper ()
-
-    if ticker .endswith ("F")and not ticker .endswith ("SA"):
-
-        base =ticker [:-1 ]
-        if base and base [-1 ].isdigit ():
-            ticker =base
-
-    if not ticker .endswith (".SA"):
-        return f"{ticker }.SA"
+    ticker = ticker.strip().upper()
+    # Remove sufixo fracionário
+    if ticker.endswith("F") and not ticker.endswith("SA"):
+        # Verifica se não é um ticker que termina naturalmente com F
+        # Tickers da B3 terminam com número + F no fracionário
+        base = ticker[:-1]
+        if base and base[-1].isdigit():
+            ticker = base
+    # Adiciona sufixo SA se não presente
+    if not ticker.endswith(".SA"):
+        return f"{ticker}.SA"
     return ticker
 
-def format_timestamp (dt :datetime )->str :
+
+def format_timestamp(dt: datetime) -> str:
     """
     Formata datetime para string legível no padrão brasileiro.
 
@@ -169,13 +180,14 @@ def format_timestamp (dt :datetime )->str :
         >>> format_timestamp(dt)
         '09/07/2026 14:30:00 BRT'
     """
+    # Converte para BRT se timezone-aware
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(BRT)
 
-    if dt .tzinfo is not None :
-        dt =dt .astimezone (BRT )
+    return dt.strftime("%d/%m/%Y %H:%M:%S") + " BRT"
 
-    return dt .strftime ("%d/%m/%Y %H:%M:%S")+" BRT"
 
-def truncate_text (text :str ,max_len :int =200 )->str :
+def truncate_text(text: str, max_len: int = 200) -> str:
     """
     Trunca texto para o comprimento máximo especificado.
 
@@ -195,14 +207,15 @@ def truncate_text (text :str ,max_len :int =200 )->str :
         >>> truncate_text("Texto longo" * 50, 20)
         'Texto longoTexto l...'
     """
-    if not text :
+    if not text:
         return ""
-    text =text .strip ()
-    if len (text )<=max_len :
+    text = text.strip()
+    if len(text) <= max_len:
         return text
-    return text [:max_len -3 ]+"..."
+    return text[: max_len - 3] + "..."
 
-def format_percent (value :float ,decimals :int =2 )->str :
+
+def format_percent(value: float, decimals: int = 2) -> str:
     """
     Formata valor como percentual no padrão brasileiro.
 
@@ -220,11 +233,12 @@ def format_percent (value :float ,decimals :int =2 )->str :
         >>> format_percent(0.0542, 1)
         '5,4%'
     """
-    pct =value *100
-    formatted =f"{pct :.{decimals }f}".replace (".",",")
-    return f"{formatted }%"
+    pct = value * 100
+    formatted = f"{pct:.{decimals}f}".replace(".", ",")
+    return f"{formatted}%"
 
-def format_number (value :float ,decimals :int =2 )->str :
+
+def format_number(value: float, decimals: int = 2) -> str:
     """
     Formata número decimal no padrão brasileiro.
 
@@ -242,10 +256,11 @@ def format_number (value :float ,decimals :int =2 )->str :
         >>> format_number(42.5, 1)
         '42,5'
     """
-    formatted =f"{value :,.{decimals }f}".replace (",","X").replace (".",",").replace ("X",".")
+    formatted = f"{value:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return formatted
 
-def clamp (value :float ,min_val :float ,max_val :float )->float :
+
+def clamp(value: float, min_val: float, max_val: float) -> float:
     """
     Limita valor entre mínimo e máximo.
 
@@ -266,4 +281,4 @@ def clamp (value :float ,min_val :float ,max_val :float )->float :
         >>> clamp(0.5, 0.0, 1.0)
         0.5
     """
-    return max (min_val ,min (max_val ,value ))
+    return max(min_val, min(max_val, value))

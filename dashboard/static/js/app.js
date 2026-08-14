@@ -1,3 +1,5 @@
+let allocationChart = null;
+
 function formatBRL(value) {
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
@@ -77,8 +79,65 @@ async function fetchStatus() {
             timeline.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">Aguardando decisões...</div>';
         }
         
+        updateChart(data);
+        
     } catch (error) {
         console.error('Erro ao buscar status:', error);
+    }
+}
+
+function updateChart(data) {
+    const ctx = document.getElementById('allocationChart');
+    if (!ctx) return;
+
+    const labels = ['Caixa Livre'];
+    const values = [data.balance];
+    const colors = ['#2d3748'];
+
+    if (data.positions) {
+        data.positions.forEach((pos, index) => {
+            labels.push(pos.ticker);
+            values.push((pos.current_price || pos.entry_price) * pos.quantity);
+            // Generate some colors
+            const hue = (index * 137.508) % 360; 
+            colors.push(`hsl(${hue}, 70%, 50%)`);
+        });
+    }
+
+    if (allocationChart) {
+        allocationChart.data.labels = labels;
+        allocationChart.data.datasets[0].data = values;
+        allocationChart.data.datasets[0].backgroundColor = colors;
+        allocationChart.update();
+    } else {
+        allocationChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: values,
+                    backgroundColor: colors,
+                    borderWidth: 0,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            color: '#a0aec0',
+                            font: {
+                                family: 'Inter',
+                                size: 12
+                            }
+                        }
+                    }
+                }
+            }
+        });
     }
 }
 

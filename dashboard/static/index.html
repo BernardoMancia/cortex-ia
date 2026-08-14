@@ -6,6 +6,7 @@
     <title>Córtex IA - Intelligence Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
     <div class="dashboard-container">
@@ -35,6 +36,13 @@
                         <span class="label">Caixa Livre (R$)</span>
                         <span class="value" id="val-balance">R$ 0,00</span>
                     </div>
+                </div>
+            </section>
+
+            <section class="panel glass-panel chart-panel">
+                <h2>Alocação da Carteira</h2>
+                <div style="position: relative; height: 250px; width: 100%; display: flex; justify-content: center; align-items: center;">
+                    <canvas id="allocationChart"></canvas>
                 </div>
             </section>
 

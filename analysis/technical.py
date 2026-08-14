@@ -10,41 +10,55 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional ,Any
+from typing import Optional, Any
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
 
-from utils .logger import get_logger
-from utils .helpers import format_brl ,format_number
+from utils.logger import get_logger
+from utils.helpers import format_brl, format_number
 
-logger =get_logger ('analysis.technical')
+logger = get_logger('analysis.technical')
 
-class TrendSignal (Enum ):
+
+# ─── Enums e Dataclasses ─────────────────────────────────────────────────────
+
+
+class TrendSignal(Enum):
     """Sinal de tendência gerado pela análise técnica."""
 
-    STRONG_BUY ='STRONG_BUY'
-    BUY ='BUY'
-    NEUTRAL ='NEUTRAL'
-    SELL ='SELL'
-    STRONG_SELL ='STRONG_SELL'
+    STRONG_BUY = 'STRONG_BUY'
+    BUY = 'BUY'
+    NEUTRAL = 'NEUTRAL'
+    SELL = 'SELL'
+    STRONG_SELL = 'STRONG_SELL'
+
 
 @dataclass
-class TechnicalResult :
+class TechnicalResult:
     """Resultado completo da análise técnica de um ativo."""
 
-    signal :TrendSignal
-    ema_9 :float
-    ema_21 :float
-    ema_50 :float
-    rsi :float
-    support :float
-    resistance :float
-    confidence :float
-    reasoning :str
+    signal: TrendSignal
+    ema_9: float
+    ema_21: float
+    ema_50: float
+    rsi: float
+    support: float
+    resistance: float
+    macd_hist: float
+    atr: float
+    rel_vol: float
+    bb_lower: float
+    bb_upper: float
+    confidence: float   # 0.0 a 1.0
+    reasoning: str      # Explicação em português
 
-class TechnicalAnalyzer :
+
+# ─── Motor de Análise Técnica ────────────────────────────────────────────────
+
+
+class TechnicalAnalyzer:
     """
     Motor de análise técnica quantitativa do Córtex.
 
@@ -53,20 +67,22 @@ class TechnicalAnalyzer :
     e raciocínio explicativo em português.
     """
 
-    DEFAULT_EMA_PERIODS :tuple [int ,...]=(9 ,21 ,50 )
+    # Períodos padrão para EMAs
+    DEFAULT_EMA_PERIODS: tuple[int, ...] = (9, 21, 50)
+    # Período padrão para RSI
+    DEFAULT_RSI_PERIOD: int = 14
+    # Janela padrão para suporte/resistência
+    DEFAULT_SR_WINDOW: int = 20
 
-    DEFAULT_RSI_PERIOD :int =14
+    # Colunas obrigatórias no DataFrame de entrada
+    REQUIRED_COLUMNS: set[str] = {'Open', 'High', 'Low', 'Close', 'Volume'}
 
-    DEFAULT_SR_WINDOW :int =20
-
-    REQUIRED_COLUMNS :set [str ]={'Open','High','Low','Close','Volume'}
-
-    def __init__ (
-    self ,
-    ema_periods :Optional [list [int ]]=None ,
-    rsi_period :int =DEFAULT_RSI_PERIOD ,
-    sr_window :int =DEFAULT_SR_WINDOW ,
-    )->None :
+    def __init__(
+        self,
+        ema_periods: Optional[list[int]] = None,
+        rsi_period: int = DEFAULT_RSI_PERIOD,
+        sr_window: int = DEFAULT_SR_WINDOW,
+    ) -> None:
         """
         Inicializa o analisador técnico.
 
@@ -75,15 +91,15 @@ class TechnicalAnalyzer :
             rsi_period: Período do RSI (padrão: 14).
             sr_window: Janela de períodos para suporte/resistência (padrão: 20).
         """
-        self .ema_periods =ema_periods or list (self .DEFAULT_EMA_PERIODS )
-        self .rsi_period =rsi_period
-        self .sr_window =sr_window
-        logger .info (
-        'TechnicalAnalyzer inicializado — EMAs: %s, RSI: %d, S/R janela: %d',
-        self .ema_periods ,self .rsi_period ,self .sr_window ,
+        self.ema_periods = ema_periods or list(self.DEFAULT_EMA_PERIODS)
+        self.rsi_period = rsi_period
+        self.sr_window = sr_window
+        logger.info(
+            'TechnicalAnalyzer inicializado — EMAs: %s, RSI: %d, S/R janela: %d',
+            self.ema_periods, self.rsi_period, self.sr_window,
         )
 
-    def analyze (self ,ticker :str ,df :Any )->TechnicalResult :
+    def analyze(self, ticker: str, df: Any) -> TechnicalResult:
         """
         Executa análise técnica completa para um ativo.
 
@@ -106,62 +122,87 @@ class TechnicalAnalyzer :
             ValueError: Se o DataFrame não tiver colunas obrigatórias
                         ou dados insuficientes.
         """
-        if isinstance (df ,list ):
-            data =[]
-            for item in df :
-                data .append ({
-                'Open':getattr (item ,'open',0.0 ),
-                'High':getattr (item ,'high',0.0 ),
-                'Low':getattr (item ,'low',0.0 ),
-                'Close':getattr (item ,'close',0.0 ),
-                'Volume':getattr (item ,'volume',0 ),
-                'Timestamp':getattr (item ,'timestamp',None )
+        if isinstance(df, list):
+            data = []
+            for item in df:
+                data.append({
+                    'Open': getattr(item, 'open', 0.0),
+                    'High': getattr(item, 'high', 0.0),
+                    'Low': getattr(item, 'low', 0.0),
+                    'Close': getattr(item, 'close', 0.0),
+                    'Volume': getattr(item, 'volume', 0),
+                    'Timestamp': getattr(item, 'timestamp', None)
                 })
-            df =pd .DataFrame (data )
+            df = pd.DataFrame(data)
 
-        logger .debug ('Iniciando análise técnica para %s (%d candles)',ticker ,len (df ))
+        logger.debug('Iniciando análise técnica para %s (%d candles)', ticker, len(df))
 
-        self ._validate_dataframe (df ,ticker )
+        self._validate_dataframe(df, ticker)
 
-        df_work =df .copy ()
+        # Trabalha com cópia para não alterar o original
+        df_work = df.copy()
 
-        self .calculate_ema (df_work ,self .ema_periods )
-        self .calculate_rsi (df_work ,self .rsi_period )
-        support ,resistance =self .find_support_resistance (df_work ,self .sr_window )
+        # Calcular indicadores
+        self.calculate_ema(df_work, self.ema_periods)
+        self.calculate_rsi(df_work, self.rsi_period)
+        self.calculate_macd(df_work)
+        self.calculate_atr(df_work)
+        self.calculate_relative_volume(df_work)
+        self.calculate_bollinger_bands(df_work)
+        support, resistance = self.find_support_resistance(df_work, self.sr_window)
 
-        last_row =df_work .iloc [-1 ]
-        ema_9 =float (last_row .get ('EMA_9',0.0 ))
-        ema_21 =float (last_row .get ('EMA_21',0.0 ))
-        ema_50 =float (last_row .get ('EMA_50',0.0 ))
-        rsi =float (last_row .get ('RSI',50.0 ))
+        # Extrair valores mais recentes
+        last_row = df_work.iloc[-1]
+        current_price = float(last_row.get('Close', 0.0))
+        ema_9 = float(last_row.get('EMA_9', 0.0))
+        ema_21 = float(last_row.get('EMA_21', 0.0))
+        ema_50 = float(last_row.get('EMA_50', 0.0))
+        rsi = float(last_row.get('RSI', 50.0))
+        macd_hist = float(last_row.get('MACD_HIST', 0.0))
+        atr = float(last_row.get('ATR', 0.0))
+        rel_vol = float(last_row.get('REL_VOL', 1.0))
+        bb_lower = float(last_row.get('BB_LOWER', 0.0))
+        bb_upper = float(last_row.get('BB_UPPER', 0.0))
 
-        signal =self ._determine_signal (ema_9 ,ema_21 ,ema_50 ,rsi )
-        confidence =self ._calculate_signal_confidence (signal ,ema_9 ,ema_21 ,ema_50 ,rsi )
-
-        result =TechnicalResult (
-        signal =signal ,
-        ema_9 =round (ema_9 ,2 ),
-        ema_21 =round (ema_21 ,2 ),
-        ema_50 =round (ema_50 ,2 ),
-        rsi =round (rsi ,2 ),
-        support =round (support ,2 ),
-        resistance =round (resistance ,2 ),
-        confidence =round (confidence ,4 ),
-        reasoning ='',
+        # Determinar sinal
+        signal = self._determine_signal(
+            current_price, ema_9, ema_21, ema_50, rsi, macd_hist, rel_vol, bb_lower, bb_upper
+        )
+        confidence = self._calculate_signal_confidence(
+            signal, ema_9, ema_21, ema_50, rsi, macd_hist, rel_vol
         )
 
-        result .reasoning =self ._generate_reasoning (ticker ,result )
+        # Montar resultado
+        result = TechnicalResult(
+            signal=signal,
+            ema_9=round(ema_9, 2),
+            ema_21=round(ema_21, 2),
+            ema_50=round(ema_50, 2),
+            rsi=round(rsi, 2),
+            support=round(support, 2),
+            resistance=round(resistance, 2),
+            macd_hist=round(macd_hist, 4),
+            atr=round(atr, 2),
+            rel_vol=round(rel_vol, 2),
+            bb_lower=round(bb_lower, 2),
+            bb_upper=round(bb_upper, 2),
+            confidence=round(confidence, 4),
+            reasoning='',
+        )
 
-        logger .info (
-        'Análise técnica %s: sinal=%s, confiança=%.2f, RSI=%.1f',
-        ticker ,signal .value ,confidence ,rsi ,
+        # Gerar raciocínio explicativo
+        result.reasoning = self._generate_reasoning(ticker, result)
+
+        logger.info(
+            'Análise técnica %s: sinal=%s, confiança=%.2f, RSI=%.1f',
+            ticker, signal.value, confidence, rsi,
         )
 
         return result
 
-    def calculate_ema (
-    self ,df :pd .DataFrame ,periods :Optional [list [int ]]=None
-    )->pd .DataFrame :
+    def calculate_ema(
+        self, df: pd.DataFrame, periods: Optional[list[int]] = None
+    ) -> pd.DataFrame:
         """
         Calcula Médias Móveis Exponenciais (EMAs) usando pandas_ta.
 
@@ -172,22 +213,22 @@ class TechnicalAnalyzer :
         Returns:
             DataFrame com colunas EMA_<período> adicionadas.
         """
-        periods =periods or self .ema_periods
-        for period in periods :
-            col_name =f'EMA_{period }'
-            ema_series =ta .ema (df ['Close'],length =period )
-            if ema_series is not None :
-                df [col_name ]=ema_series
-            else :
-                logger .warning (
-                'EMA(%d) retornou None — dados insuficientes?',period
+        periods = periods or self.ema_periods
+        for period in periods:
+            col_name = f'EMA_{period}'
+            ema_series = ta.ema(df['Close'], length=period)
+            if ema_series is not None:
+                df[col_name] = ema_series
+            else:
+                logger.warning(
+                    'EMA(%d) retornou None — dados insuficientes?', period
                 )
-                df [col_name ]=np .nan
+                df[col_name] = np.nan
         return df
 
-    def calculate_rsi (
-    self ,df :pd .DataFrame ,period :Optional [int ]=None
-    )->pd .DataFrame :
+    def calculate_rsi(
+        self, df: pd.DataFrame, period: Optional[int] = None
+    ) -> pd.DataFrame:
         """
         Calcula o Índice de Força Relativa (RSI) usando pandas_ta.
 
@@ -198,18 +239,63 @@ class TechnicalAnalyzer :
         Returns:
             DataFrame com coluna 'RSI' adicionada.
         """
-        period =period or self .rsi_period
-        rsi_series =ta .rsi (df ['Close'],length =period )
-        if rsi_series is not None :
-            df ['RSI']=rsi_series
-        else :
-            logger .warning ('RSI(%d) retornou None — dados insuficientes?',period )
-            df ['RSI']=np .nan
+        period = period or self.rsi_period
+        rsi_series = ta.rsi(df['Close'], length=period)
+        if rsi_series is not None:
+            df['RSI'] = rsi_series
+        else:
+            logger.warning('RSI(%d) retornou None — dados insuficientes?', period)
+            df['RSI'] = np.nan
         return df
 
-    def find_support_resistance (
-    self ,df :pd .DataFrame ,window :Optional [int ]=None
-    )->tuple [float ,float ]:
+    def calculate_macd(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calcula o MACD(12, 26, 9) usando pandas_ta."""
+        macd_df = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+        if macd_df is not None and not macd_df.empty:
+            # A coluna do histograma no pandas_ta para esses parâmetros é 'MACDh_12_26_9'
+            col = [c for c in macd_df.columns if c.startswith('MACDh_')]
+            if col:
+                df['MACD_HIST'] = macd_df[col[0]]
+            else:
+                df['MACD_HIST'] = np.nan
+        else:
+            logger.warning('MACD retornou None — dados insuficientes?')
+            df['MACD_HIST'] = np.nan
+        return df
+
+    def calculate_bollinger_bands(self, df: pd.DataFrame, length: int = 20, std: float = 2.0) -> pd.DataFrame:
+        """Calcula as Bandas de Bollinger usando pandas_ta."""
+        bb_df = ta.bbands(df['Close'], length=length, std=std)
+        if bb_df is not None and not bb_df.empty:
+            lower_col = [c for c in bb_df.columns if c.startswith('BBL_')]
+            upper_col = [c for c in bb_df.columns if c.startswith('BBU_')]
+            df['BB_LOWER'] = bb_df[lower_col[0]] if lower_col else np.nan
+            df['BB_UPPER'] = bb_df[upper_col[0]] if upper_col else np.nan
+        else:
+            logger.warning('Bollinger Bands retornou None — dados insuficientes?')
+            df['BB_LOWER'] = np.nan
+            df['BB_UPPER'] = np.nan
+        return df
+
+    def calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+        """Calcula o ATR(14) para medir a volatilidade."""
+        atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=period)
+        if atr_series is not None:
+            df['ATR'] = atr_series
+        else:
+            logger.warning('ATR(%d) retornou None', period)
+            df['ATR'] = np.nan
+        return df
+
+    def calculate_relative_volume(self, df: pd.DataFrame, period: int = 20) -> pd.DataFrame:
+        """Calcula a SMA do Volume e o Volume Relativo."""
+        df['SMA_VOL'] = df['Volume'].rolling(period).mean()
+        df['REL_VOL'] = np.where(df['SMA_VOL'] > 0, df['Volume'] / df['SMA_VOL'], 1.0)
+        return df
+
+    def find_support_resistance(
+        self, df: pd.DataFrame, window: Optional[int] = None
+    ) -> tuple[float, float]:
         """
         Identifica níveis de suporte e resistência baseados em pivôs.
 
@@ -223,30 +309,31 @@ class TechnicalAnalyzer :
         Returns:
             Tupla (suporte, resistência) em valores absolutos.
         """
-        window =window or self .sr_window
+        window = window or self.sr_window
 
-        effective_window =min (window ,len (df ))
-        if effective_window <2 :
-            last_close =float (df ['Close'].iloc [-1 ])
-            logger .warning (
-            'Dados insuficientes para S/R (janela=%d, disponível=%d). '
-            'Usando preço atual como fallback.',
-            window ,len (df ),
+        # Limita a janela ao tamanho disponível
+        effective_window = min(window, len(df))
+        if effective_window < 2:
+            last_close = float(df['Close'].iloc[-1])
+            logger.warning(
+                'Dados insuficientes para S/R (janela=%d, disponível=%d). '
+                'Usando preço atual como fallback.',
+                window, len(df),
             )
-            return last_close *0.95 ,last_close *1.05
+            return last_close * 0.95, last_close * 1.05
 
-        recent =df .tail (effective_window )
-        support =float (recent ['Low'].min ())
-        resistance =float (recent ['High'].max ())
+        recent = df.tail(effective_window)
+        support = float(recent['Low'].min())
+        resistance = float(recent['High'].max())
 
-        logger .debug (
-        'Suporte: %s, Resistência: %s (janela=%d)',
-        format_brl (support ),format_brl (resistance ),effective_window ,
+        logger.debug(
+            'Suporte: %s, Resistência: %s (janela=%d)',
+            format_brl(support), format_brl(resistance), effective_window,
         )
 
-        return support ,resistance
+        return support, resistance
 
-    def _validate_dataframe (self ,df :pd .DataFrame ,ticker :str )->None :
+    def _validate_dataframe(self, df: pd.DataFrame, ticker: str) -> None:
         """
         Valida se o DataFrame possui colunas e dados suficientes.
 
@@ -257,129 +344,121 @@ class TechnicalAnalyzer :
         Raises:
             ValueError: Se faltar colunas ou dados insuficientes.
         """
-        if df is None or df .empty :
-            raise ValueError (
-            f'DataFrame vazio ou nulo para {ticker }. '
-            'Não é possível executar análise técnica.'
+        if df is None or df.empty:
+            raise ValueError(
+                f'DataFrame vazio ou nulo para {ticker}. '
+                'Não é possível executar análise técnica.'
             )
 
-        missing_cols =self .REQUIRED_COLUMNS -set (df .columns )
-        if missing_cols :
-            raise ValueError (
-            f'DataFrame de {ticker } não possui colunas obrigatórias: '
-            f'{missing_cols }. Colunas presentes: {list (df .columns )}'
+        missing_cols = self.REQUIRED_COLUMNS - set(df.columns)
+        if missing_cols:
+            raise ValueError(
+                f'DataFrame de {ticker} não possui colunas obrigatórias: '
+                f'{missing_cols}. Colunas presentes: {list(df.columns)}'
             )
 
-        min_required =max (self .ema_periods )+1
-        if len (df )<min_required :
-            raise ValueError (
-            f'Dados insuficientes para {ticker }: {len (df )} candles '
-            f'(mínimo necessário: {min_required } para EMA({max (self .ema_periods )}))'
+        # Precisa de pelo menos max(ema_periods) + 1 candles para EMAs
+        min_required = max(self.ema_periods) + 1
+        if len(df) < min_required:
+            raise ValueError(
+                f'Dados insuficientes para {ticker}: {len(df)} candles '
+                f'(mínimo necessário: {min_required} para EMA({max(self.ema_periods)}))'
             )
 
-    def _determine_signal (
-    self ,ema_9 :float ,ema_21 :float ,ema_50 :float ,rsi :float
-    )->TrendSignal :
+    def _determine_signal(
+        self, current_price: float, ema_9: float, ema_21: float, ema_50: float, 
+        rsi: float, macd_hist: float, rel_vol: float, bb_lower: float, bb_upper: float
+    ) -> TrendSignal:
         """
-        Determina o sinal de tendência baseado nas EMAs e RSI.
+        Determina o sinal de tendência baseado nas EMAs, RSI, MACD e Volume, com filtro de BB.
 
         Lógica de sinais:
-            - STRONG_BUY:  EMA9 > EMA21 > EMA50 E RSI < 45 (tendência + espaço p/ alta)
-            - BUY:         EMA9 > EMA21 E RSI < 60
-            - NEUTRAL:     Sem alinhamento claro ou RSI entre 40-60
-            - SELL:        EMA9 < EMA21 E RSI > 60
-            - STRONG_SELL: EMA9 < EMA21 < EMA50 E RSI > 55 (tendência + pressão de baixa)
-
-        Args:
-            ema_9: Valor atual da EMA(9).
-            ema_21: Valor atual da EMA(21).
-            ema_50: Valor atual da EMA(50).
-            rsi: Valor atual do RSI.
-
-        Returns:
-            TrendSignal correspondente à análise.
+            - STRONG_BUY:  EMA9 > EMA21 > EMA50 E RSI < 45 E MACD > 0 E Vol > 1.2x
+            - BUY:         EMA9 > EMA21 E RSI < 60 E MACD > 0
+            - NEUTRAL:     Sem alinhamento claro ou sem volume
+            - SELL:        EMA9 < EMA21 E RSI > 60 E MACD < 0
+            - STRONG_SELL: EMA9 < EMA21 < EMA50 E RSI > 55 E MACD < 0 E Vol > 1.2x
         """
+        # Verificar NaN — se algum valor é NaN, retorna NEUTRAL
+        if any(v is None or (isinstance(v, float) and np.isnan(v)) for v in [ema_9, ema_21, ema_50, rsi, macd_hist, rel_vol, bb_lower, bb_upper]):
+            logger.warning('Valores NaN detectados nos indicadores — sinal NEUTRAL')
+            return TrendSignal.NEUTRAL
 
-        if any (np .isnan (v )for v in [ema_9 ,ema_21 ,ema_50 ,rsi ]):
-            logger .warning ('Valores NaN detectados nos indicadores — sinal NEUTRAL')
-            return TrendSignal .NEUTRAL
+        signal = TrendSignal.NEUTRAL
 
-        if ema_9 >ema_21 >ema_50 and rsi <45 :
-            return TrendSignal .STRONG_BUY
+        # STRONG_BUY: alinhamento altista + sobrevendido + MACD pos + Vol alto
+        if ema_9 > ema_21 > ema_50 and rsi < 45 and macd_hist > 0 and rel_vol > 1.2:
+            signal = TrendSignal.STRONG_BUY
+        # STRONG_SELL: alinhamento baixista + sobrecomprado + MACD neg + Vol alto
+        elif ema_9 < ema_21 < ema_50 and rsi > 55 and macd_hist < 0 and rel_vol > 1.2:
+            signal = TrendSignal.STRONG_SELL
+        # BUY: cruzamento altista + RSI sem sobrecompra + MACD pos
+        elif ema_9 > ema_21 and rsi < 60 and macd_hist > 0:
+            signal = TrendSignal.BUY
+        # SELL: cruzamento baixista + RSI sem sobrevenda + MACD neg
+        elif ema_9 < ema_21 and rsi > 40 and macd_hist < 0:
+            signal = TrendSignal.SELL
 
-        if ema_9 <ema_21 <ema_50 and rsi >55 :
-            return TrendSignal .STRONG_SELL
+        # Aplicar filtro de Bandas de Bollinger
+        if signal in (TrendSignal.BUY, TrendSignal.STRONG_BUY):
+            if current_price > bb_upper:
+                logger.debug("Sinal de compra cancelado: preço acima da Banda de Bollinger superior.")
+                signal = TrendSignal.NEUTRAL
+        elif signal in (TrendSignal.SELL, TrendSignal.STRONG_SELL):
+            if current_price < bb_lower:
+                logger.debug("Sinal de venda cancelado: preço abaixo da Banda de Bollinger inferior.")
+                signal = TrendSignal.NEUTRAL
 
-        if ema_9 >ema_21 and rsi <60 :
-            return TrendSignal .BUY
+        return signal
 
-        if ema_9 <ema_21 and rsi >60 :
-            return TrendSignal .SELL
-
-        return TrendSignal .NEUTRAL
-
-    def _calculate_signal_confidence (
-    self ,
-    signal :TrendSignal ,
-    ema_9 :float ,
-    ema_21 :float ,
-    ema_50 :float ,
-    rsi :float ,
-    )->float :
+    def _calculate_signal_confidence(
+        self,
+        signal: TrendSignal,
+        ema_9: float,
+        ema_21: float,
+        ema_50: float,
+        rsi: float,
+        macd_hist: float,
+        rel_vol: float,
+    ) -> float:
         """
         Calcula nível de confiança do sinal (0.0 a 1.0).
-
-        A confiança é maior quando:
-            - Todas as EMAs estão alinhadas na direção do sinal
-            - O RSI está em zona extrema coerente com o sinal
-            - A distância entre EMAs é significativa
-
-        Args:
-            signal: Sinal determinado.
-            ema_9: Valor da EMA(9).
-            ema_21: Valor da EMA(21).
-            ema_50: Valor da EMA(50).
-            rsi: Valor do RSI.
-
-        Returns:
-            Confiança entre 0.0 e 1.0.
         """
-        if signal ==TrendSignal .STRONG_BUY :
+        if signal == TrendSignal.STRONG_BUY:
+            # Confiança base alta + bônus por RSI muito baixo + bônus volume
+            base = 0.70
+            rsi_bonus = max(0.0, (45.0 - rsi) / 45.0) * 0.10
+            vol_bonus = min(0.15, (rel_vol - 1.0) * 0.1) if rel_vol > 1.0 else 0.0
+            macd_bonus = 0.05 if macd_hist > 0 else 0.0
+            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
 
-            base =0.80
-            rsi_bonus =max (0.0 ,(35.0 -rsi )/35.0 )*0.15
+        if signal == TrendSignal.BUY:
+            base = 0.50
+            rsi_bonus = max(0.0, (60.0 - rsi) / 60.0) * 0.15
+            vol_bonus = min(0.10, (rel_vol - 1.0) * 0.05) if rel_vol > 1.0 else 0.0
+            macd_bonus = 0.05 if macd_hist > 0 else 0.0
+            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
 
-            spread =(ema_9 -ema_50 )/ema_50 if ema_50 >0 else 0.0
-            spread_bonus =min (abs (spread )*2.0 ,0.05 )
-            return min (1.0 ,base +rsi_bonus +spread_bonus )
-
-        if signal ==TrendSignal .BUY :
-            base =0.55
-
-            rsi_bonus =max (0.0 ,(60.0 -rsi )/60.0 )*0.20
-
-            alignment_bonus =0.10 if ema_9 >ema_21 >ema_50 else 0.0
-            return min (1.0 ,base +rsi_bonus +alignment_bonus )
-
-        if signal ==TrendSignal .NEUTRAL :
+        if signal == TrendSignal.NEUTRAL:
             return 0.30
 
-        if signal ==TrendSignal .SELL :
-            base =0.55
-            rsi_bonus =max (0.0 ,(rsi -60.0 )/40.0 )*0.20
-            alignment_bonus =0.10 if ema_9 <ema_21 <ema_50 else 0.0
-            return min (1.0 ,base +rsi_bonus +alignment_bonus )
+        if signal == TrendSignal.SELL:
+            base = 0.50
+            rsi_bonus = max(0.0, (rsi - 60.0) / 40.0) * 0.15
+            vol_bonus = min(0.10, (rel_vol - 1.0) * 0.05) if rel_vol > 1.0 else 0.0
+            macd_bonus = 0.05 if macd_hist < 0 else 0.0
+            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
 
-        if signal ==TrendSignal .STRONG_SELL :
-            base =0.80
-            rsi_bonus =max (0.0 ,(rsi -70.0 )/30.0 )*0.15
-            spread =(ema_50 -ema_9 )/ema_50 if ema_50 >0 else 0.0
-            spread_bonus =min (abs (spread )*2.0 ,0.05 )
-            return min (1.0 ,base +rsi_bonus +spread_bonus )
+        if signal == TrendSignal.STRONG_SELL:
+            base = 0.70
+            rsi_bonus = max(0.0, (rsi - 55.0) / 45.0) * 0.10
+            vol_bonus = min(0.15, (rel_vol - 1.0) * 0.1) if rel_vol > 1.0 else 0.0
+            macd_bonus = 0.05 if macd_hist < 0 else 0.0
+            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
 
         return 0.30
 
-    def _generate_reasoning (self ,ticker :str ,result :TechnicalResult )->str :
+    def _generate_reasoning(self, ticker: str, result: TechnicalResult) -> str:
         """
         Gera texto explicativo em português sobre a análise técnica.
 
@@ -393,74 +472,88 @@ class TechnicalAnalyzer :
         Returns:
             Texto explicativo em português.
         """
-        parts :list [str ]=[]
+        parts: list[str] = []
 
-        ema9_str =format_brl (result .ema_9 )
-        ema21_str =format_brl (result .ema_21 )
-        ema50_str =format_brl (result .ema_50 )
+        # Análise de EMAs
+        ema9_str = format_brl(result.ema_9)
+        ema21_str = format_brl(result.ema_21)
+        ema50_str = format_brl(result.ema_50)
 
-        if result .ema_9 >result .ema_21 :
-            parts .append (
-            f'EMA(9) em {ema9_str } cruzou acima da EMA(21) em {ema21_str }, '
-            f'indicando momentum de alta.'
+        if result.ema_9 > result.ema_21:
+            parts.append(
+                f'EMA(9) em {ema9_str} cruzou acima da EMA(21) em {ema21_str}, '
+                f'indicando momentum de alta.'
             )
-        elif result .ema_9 <result .ema_21 :
-            parts .append (
-            f'EMA(9) em {ema9_str } está abaixo da EMA(21) em {ema21_str }, '
-            f'indicando momentum de baixa.'
+        elif result.ema_9 < result.ema_21:
+            parts.append(
+                f'EMA(9) em {ema9_str} está abaixo da EMA(21) em {ema21_str}, '
+                f'indicando momentum de baixa.'
             )
-        else :
-            parts .append (
-            f'EMA(9) em {ema9_str } e EMA(21) em {ema21_str } estão convergindo.'
+        else:
+            parts.append('EMAs sem direção definida.')
+
+        # MACD e Volume
+        if np.isnan(result.macd_hist):
+            parts.append('MACD indisponível (dados insuficientes).')
+        else:
+            macd_sign = 'positivo' if result.macd_hist > 0 else 'negativo'
+            parts.append(f'MACD indica momentum {macd_sign}.')
+
+        if result.rel_vol > 1.2:
+            parts.append(f'Volume alto ({result.rel_vol:.1f}x a média), confirmando o movimento.')
+
+        # Alinhamento com EMA(50)
+        if result.ema_9 > result.ema_21 > result.ema_50:
+            parts.append(
+                f'EMA(50) em {ema50_str} confirma tendência altista com alinhamento completo.'
+            )
+        elif result.ema_9 < result.ema_21 < result.ema_50:
+            parts.append(
+                f'EMA(50) em {ema50_str} confirma tendência baixista com alinhamento completo.'
+            )
+        else:
+            parts.append(f'EMA(50) em {ema50_str} — tendência mista.')
+
+        # Análise do RSI
+        rsi_str = format_number(result.rsi, 1)
+        if np.isnan(result.rsi):
+            parts.append('RSI indisponível (dados insuficientes).')
+        elif result.rsi < 30:
+            parts.append(
+                f'RSI em {rsi_str} — zona de sobrevendido extremo, '
+                f'possível reversão de alta.'
+            )
+        elif result.rsi < 35:
+            parts.append(
+                f'RSI em {rsi_str} — zona de sobrevendido, '
+                f'sinaliza oportunidade de compra.'
+            )
+        elif result.rsi < 45:
+            parts.append(
+                f'RSI em {rsi_str} — levemente abaixo do neutro, '
+                f'espaço para valorização.'
+            )
+        elif result.rsi <= 55:
+            parts.append(
+                f'RSI em {rsi_str} — zona neutra, sem pressão direcional.'
+            )
+        elif result.rsi <= 60:
+            parts.append(
+                f'RSI em {rsi_str} — levemente acima do neutro.'
+            )
+        elif result.rsi <= 70:
+            parts.append(
+                f'RSI em {rsi_str} — pressão de alta, atenção à sobrecompra.'
+            )
+        else:
+            parts.append(
+                f'RSI em {rsi_str} — zona de sobrecomprado, '
+                f'risco de correção.'
             )
 
-        if result .ema_9 >result .ema_21 >result .ema_50 :
-            parts .append (
-            f'EMA(50) em {ema50_str } confirma tendência altista com alinhamento completo.'
-            )
-        elif result .ema_9 <result .ema_21 <result .ema_50 :
-            parts .append (
-            f'EMA(50) em {ema50_str } confirma tendência baixista com alinhamento completo.'
-            )
-        else :
-            parts .append (f'EMA(50) em {ema50_str } — tendência mista.')
+        # Suporte e resistência
+        sup_str = format_brl(result.support)
+        res_str = format_brl(result.resistance)
+        parts.append(f'Suporte em {sup_str}, resistência em {res_str}.')
 
-        rsi_str =format_number (result .rsi ,1 )
-        if result .rsi <30 :
-            parts .append (
-            f'RSI em {rsi_str } — zona de sobrevendido extremo, '
-            f'possível reversão de alta.'
-            )
-        elif result .rsi <35 :
-            parts .append (
-            f'RSI em {rsi_str } — zona de sobrevendido, '
-            f'sinaliza oportunidade de compra.'
-            )
-        elif result .rsi <45 :
-            parts .append (
-            f'RSI em {rsi_str } — levemente abaixo do neutro, '
-            f'espaço para valorização.'
-            )
-        elif result .rsi <=55 :
-            parts .append (
-            f'RSI em {rsi_str } — zona neutra, sem pressão direcional.'
-            )
-        elif result .rsi <=60 :
-            parts .append (
-            f'RSI em {rsi_str } — levemente acima do neutro.'
-            )
-        elif result .rsi <=70 :
-            parts .append (
-            f'RSI em {rsi_str } — pressão de alta, atenção à sobrecompra.'
-            )
-        else :
-            parts .append (
-            f'RSI em {rsi_str } — zona de sobrecomprado, '
-            f'risco de correção.'
-            )
-
-        sup_str =format_brl (result .support )
-        res_str =format_brl (result .resistance )
-        parts .append (f'Suporte em {sup_str }, resistência em {res_str }.')
-
-        return ' '.join (parts )
+        return ' '.join(parts)

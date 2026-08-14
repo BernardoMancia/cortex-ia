@@ -22,6 +22,7 @@ feedparser>=6.0
 # NLP Sentiment (opcional - instalar separadamente para modo 'full')
 # transformers>=4.35
 # torch>=2.0
+google-genai>=1.0.0
 
 # Telegram
 python-telegram-bot>=20.0

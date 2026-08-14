@@ -6,18 +6,19 @@ Exporta os tipos de domínio, implementações concretas, a classe Portfolio,
 e a função-fábrica create_broker() para instanciação baseada em configuração.
 """
 
-from broker .base import (
-BaseBroker ,
-BrokerBase ,
-Order ,
-OrderStatus ,
-OrderType ,
+from broker.base import (
+    BaseBroker,
+    BrokerBase,
+    Order,
+    OrderStatus,
+    OrderType,
 )
-from broker .simulator import SimulatorBroker
-from models .data_models import Position ,PortfolioSummary
+from broker.simulator import SimulatorBroker
+from models.data_models import Position, PortfolioSummary
 from portfolio import Portfolio
 
-def create_broker (mode :str |None =None )->BrokerBase :
+
+def create_broker(mode: str | None = None) -> BrokerBase:
     """
     Função-fábrica que cria a instância de broker adequada.
 
@@ -35,33 +36,34 @@ def create_broker (mode :str |None =None )->BrokerBase :
         ValueError: Se o modo for desconhecido.
         RuntimeError: Se o modo 'mt5' for selecionado fora do Windows.
     """
-    from config .settings import settings
+    from config.settings import settings
 
-    if mode is None :
-        mode =settings .broker_mode
+    if mode is None:
+        mode = settings.broker_mode
 
-    mode =mode .lower ().strip ()
+    mode = mode.lower().strip()
 
-    if mode in ("simulator","sim","paper","simulador"):
-        return SimulatorBroker ()
-    elif mode in ("mt5","metatrader","metatrader5","real"):
-        from broker .rest_mt5_broker import RestMT5Broker
-        return RestMT5Broker ()
-    else :
-        raise ValueError (
-        f"Modo de broker desconhecido: '{mode }'. "
-        f"Use 'simulator' ou 'mt5'."
+    if mode in ("simulator", "sim", "paper", "simulador"):
+        return SimulatorBroker()
+    elif mode in ("mt5", "metatrader", "metatrader5", "real"):
+        from broker.rest_mt5_broker import RestMT5Broker
+        return RestMT5Broker()
+    else:
+        raise ValueError(
+            f"Modo de broker desconhecido: '{mode}'. "
+            f"Use 'simulator' ou 'mt5'."
         )
 
-__all__ =[
-"BaseBroker",
-"BrokerBase",
-"Order",
-"OrderStatus",
-"OrderType",
-"Position",
-"SimulatorBroker",
-"Portfolio",
-"PortfolioSummary",
-"create_broker",
+
+__all__ = [
+    "BaseBroker",
+    "BrokerBase",
+    "Order",
+    "OrderStatus",
+    "OrderType",
+    "Position",
+    "SimulatorBroker",
+    "Portfolio",
+    "PortfolioSummary",
+    "create_broker",
 ]

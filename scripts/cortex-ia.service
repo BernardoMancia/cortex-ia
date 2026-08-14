@@ -1,0 +1,20 @@
+[Unit]
+Description=Córtex IA Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+# Customize User, WorkingDirectory and ExecStart paths as needed for your environment
+User=cortex
+Group=cortex
+WorkingDirectory=/opt/cortex-ia
+Environment="PATH=/opt/cortex-ia/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/opt/cortex-ia/.venv/bin/python main.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+StandardOutput=append:/LOGS-PROJETOS/cortex-ia/systemd-out.log
+StandardError=append:/LOGS-PROJETOS/cortex-ia/systemd-error.log
+
+[Install]
+WantedBy=multi-user.target

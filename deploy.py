@@ -76,13 +76,13 @@ def deploy (host ,port ,user ,password ,local_file ,remote_dir ):
     print ("Deployment complete!")
 
 if __name__ =="__main__":
-    host =os .getenv ("DEPLOY_HOST","82.112.245.99")
-    port =int (os .getenv ("DEPLOY_PORT","22"))
-    user =os .getenv ("DEPLOY_USER","servico")
-    password =os .getenv ("DEPLOY_PASSWORD","")
-    if not password :
-        raise ValueError ("DEPLOY_PASSWORD environment variable is required. Set it before deploying.")
-    remote_dir ="/home/servico/cortex-ia"
+    host = os.getenv("DEPLOY_HOST", "")
+    port = int(os.getenv("DEPLOY_PORT", "22"))
+    user = os.getenv("DEPLOY_USER", "")
+    password = os.getenv("DEPLOY_PASSWORD", "")
+    remote_dir = os.getenv("DEPLOY_REMOTE_DIR", "~/cortex-ia")
+    if not host or not password or not user:
+        raise ValueError("DEPLOY_HOST, DEPLOY_USER and DEPLOY_PASSWORD environment variables are required.")
     tar_filename ="cortex-ia.tar.gz"
 
     create_tarball (".",tar_filename )

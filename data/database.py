@@ -12,25 +12,34 @@ garantir acesso seguro em ambientes multi-thread.
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import date ,datetime ,timedelta ,timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any ,Generator
+from typing import Any, Generator
 
-from utils .logger import get_logger
+from utils.logger import get_logger
 
-logger =get_logger (__name__ )
+logger = get_logger(__name__)
 
-_BRT =timezone (timedelta (hours =-3 ),name ="BRT")
+# ────────────────────────────────────────────────────────────
+# Timezone BRT
+# ────────────────────────────────────────────────────────────
+_BRT = timezone(timedelta(hours=-3), name="BRT")
 
-def _now_brt_iso ()->str :
+
+def _now_brt_iso() -> str:
     """Retorna timestamp atual em BRT no formato ISO 8601."""
-    return datetime .now (tz =_BRT ).isoformat ()
+    return datetime.now(tz=_BRT).isoformat()
 
-def _today_brt_iso ()->str :
+
+def _today_brt_iso() -> str:
     """Retorna a data atual em BRT no formato ISO 8601 (só data)."""
-    return datetime .now (tz =_BRT ).date ().isoformat ()
+    return datetime.now(tz=_BRT).date().isoformat()
 
-_CREATE_TABLES_SQL :str ="""
+
+# ────────────────────────────────────────────────────────────
+# SQL de criação das tabelas
+# ────────────────────────────────────────────────────────────
+_CREATE_TABLES_SQL: str = """
 CREATE TABLE IF NOT EXISTS trades (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker          TEXT    NOT NULL,
@@ -102,6 +111,17 @@ CREATE TABLE IF NOT EXISTS system_health (
     timestamp       TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS news_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    title           TEXT    NOT NULL,
+    source          TEXT    NOT NULL,
+    url             TEXT    NOT NULL UNIQUE,
+    ticker          TEXT,
+    sentiment       REAL,
+    published_at    TEXT    NOT NULL,
+    scraped_at      TEXT    NOT NULL
+);
+
 -- Índices para consultas frequentes
 CREATE INDEX IF NOT EXISTS idx_trades_ticker      ON trades(ticker);
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp    ON trades(timestamp);
@@ -113,9 +133,12 @@ CREATE INDEX IF NOT EXISTS idx_decisions_ticker    ON ai_decisions(ticker);
 CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON ai_decisions(timestamp);
 CREATE INDEX IF NOT EXISTS idx_daily_reports_date  ON daily_reports(date);
 CREATE INDEX IF NOT EXISTS idx_health_timestamp    ON system_health(timestamp);
+CREATE INDEX IF NOT EXISTS idx_news_ticker         ON news_items(ticker);
+CREATE INDEX IF NOT EXISTS idx_news_published      ON news_items(published_at);
 """
 
-class DatabaseManager :
+
+class DatabaseManager:
     """
     Gerenciador de banco de dados SQLite para o Projeto Córtex.
 
@@ -136,7 +159,7 @@ class DatabaseManager :
         )
     """
 
-    def __init__ (self ,db_path :Path |str |None =None )->None :
+    def __init__(self, db_path: Path | str | None = None) -> None:
         """
         Inicializa o gerenciador de banco de dados.
 
@@ -144,28 +167,28 @@ class DatabaseManager :
             db_path: Caminho do arquivo SQLite.
                      Se None, usa o padrão de config/settings.
         """
-        if db_path is None :
-            from config .settings import settings
-            self .db_path :Path =settings .DB_PATH
-        else :
-            self .db_path =Path (db_path )
+        if db_path is None:
+            from config.settings import settings
+            self.db_path: Path = settings.DB_PATH
+        else:
+            self.db_path = Path(db_path)
 
-        self .db_path .parent .mkdir (parents =True ,exist_ok =True )
-        self ._lock =threading .RLock ()
-        self ._init_database ()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
+        self._init_database()
 
-    def _init_database (self )->None :
+    def _init_database(self) -> None:
         """Cria as tabelas e índices no banco de dados."""
-        try :
-            with self ._get_connection ()as conn :
-                conn .executescript (_CREATE_TABLES_SQL )
-            logger .info ("Banco de dados inicializado: %s",self .db_path )
-        except sqlite3 .Error as exc :
-            logger .critical ("Falha ao inicializar banco de dados: %s",exc )
+        try:
+            with self._get_connection() as conn:
+                conn.executescript(_CREATE_TABLES_SQL)
+            logger.info("Banco de dados inicializado: %s", self.db_path)
+        except sqlite3.Error as exc:
+            logger.critical("Falha ao inicializar banco de dados: %s", exc)
             raise
 
     @contextmanager
-    def _get_connection (self )->Generator [sqlite3 .Connection ,None ,None ]:
+    def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """
         Context manager para conexão com o banco de dados.
 
@@ -175,28 +198,28 @@ class DatabaseManager :
         Yields:
             Conexão SQLite configurada com Row factory.
         """
-        conn =sqlite3 .connect (
-        str (self .db_path ),
-        timeout =30.0 ,
-        detect_types =sqlite3 .PARSE_DECLTYPES ,
+        conn = sqlite3.connect(
+            str(self.db_path),
+            timeout=30.0,
+            detect_types=sqlite3.PARSE_DECLTYPES,
         )
-        conn .row_factory =sqlite3 .Row
-        conn .execute ("PRAGMA journal_mode=WAL")
-        conn .execute ("PRAGMA foreign_keys=ON")
-        try :
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
             yield conn
-            conn .commit ()
-        except sqlite3 .Error :
-            conn .rollback ()
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
             raise
-        finally :
-            conn .close ()
+        finally:
+            conn.close()
 
-    def _execute (
-    self ,
-    sql :str ,
-    params :tuple [Any ,...]=(),
-    )->int :
+    def _execute(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> int:
         """
         Executa uma instrução SQL com lock e retorna o lastrowid.
 
@@ -207,20 +230,20 @@ class DatabaseManager :
         Returns:
             ID da última linha inserida.
         """
-        with self ._lock :
-            try :
-                with self ._get_connection ()as conn :
-                    cursor =conn .execute (sql ,params )
-                    return cursor .lastrowid or 0
-            except sqlite3 .Error as exc :
-                logger .error ("Erro ao executar SQL: %s | Params: %s | Erro: %s",sql ,params ,exc )
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.execute(sql, params)
+                    return cursor.lastrowid or 0
+            except sqlite3.Error as exc:
+                logger.error("Erro ao executar SQL: %s | Params: %s | Erro: %s", sql, params, exc)
                 raise
 
-    def _fetch_all (
-    self ,
-    sql :str ,
-    params :tuple [Any ,...]=(),
-    )->list [dict [str ,Any ]]:
+    def _fetch_all(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> list[dict[str, Any]]:
         """
         Executa consulta SQL e retorna todas as linhas como dicts.
 
@@ -231,21 +254,21 @@ class DatabaseManager :
         Returns:
             Lista de dicionários com os resultados.
         """
-        with self ._lock :
-            try :
-                with self ._get_connection ()as conn :
-                    cursor =conn .execute (sql ,params )
-                    rows =cursor .fetchall ()
-                    return [dict (row )for row in rows ]
-            except sqlite3 .Error as exc :
-                logger .error ("Erro na consulta SQL: %s | Params: %s | Erro: %s",sql ,params ,exc )
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.execute(sql, params)
+                    rows = cursor.fetchall()
+                    return [dict(row) for row in rows]
+            except sqlite3.Error as exc:
+                logger.error("Erro na consulta SQL: %s | Params: %s | Erro: %s", sql, params, exc)
                 return []
 
-    def _fetch_one (
-    self ,
-    sql :str ,
-    params :tuple [Any ,...]=(),
-    )->dict [str ,Any ]|None :
+    def _fetch_one(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> dict[str, Any] | None:
         """
         Executa consulta SQL e retorna a primeira linha como dict.
 
@@ -256,28 +279,32 @@ class DatabaseManager :
         Returns:
             Dicionário com o resultado ou None se não encontrar.
         """
-        with self ._lock :
-            try :
-                with self ._get_connection ()as conn :
-                    cursor =conn .execute (sql ,params )
-                    row =cursor .fetchone ()
-                    return dict (row )if row else None
-            except sqlite3 .Error as exc :
-                logger .error ("Erro na consulta SQL: %s | Params: %s | Erro: %s",sql ,params ,exc )
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.execute(sql, params)
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as exc:
+                logger.error("Erro na consulta SQL: %s | Params: %s | Erro: %s", sql, params, exc)
                 return None
 
-    def insert_trade (
-    self ,
-    ticker :str ,
-    action :str ,
-    quantity :int ,
-    price :float ,
-    total_value :float ,
-    stop_loss :float |None =None ,
-    reasoning :str |None =None ,
-    is_simulated :bool =True ,
-    timestamp :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — Trades
+    # ────────────────────────────────────────────────────────
+
+    def insert_trade(
+        self,
+        ticker: str,
+        action: str,
+        quantity: int,
+        price: float,
+        total_value: float,
+        stop_loss: float | None = None,
+        reasoning: str | None = None,
+        is_simulated: bool = True,
+        timestamp: str | None = None,
+    ) -> int:
         """
         Registra uma operação de compra ou venda no banco de dados.
 
@@ -295,33 +322,37 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        action =action .upper ().strip ()
-        if action not in ("BUY","SELL"):
-            raise ValueError (f"Ação inválida: '{action }'. Use 'BUY' ou 'SELL'.")
+        action = action.upper().strip()
+        if action not in ("BUY", "SELL"):
+            raise ValueError(f"Ação inválida: '{action}'. Use 'BUY' ou 'SELL'.")
 
-        ts =timestamp or _now_brt_iso ()
-        row_id =self ._execute (
-        """INSERT INTO trades
+        ts = timestamp or _now_brt_iso()
+        row_id = self._execute(
+            """INSERT INTO trades
                (ticker, action, quantity, price, total_value, stop_loss,
                 timestamp, reasoning, is_simulated)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (ticker .upper (),action ,quantity ,price ,total_value ,
-        stop_loss ,ts ,reasoning ,int (is_simulated )),
+            (ticker.upper(), action, quantity, price, total_value,
+             stop_loss, ts, reasoning, int(is_simulated)),
         )
-        logger .info (
-        "Trade registrado: %s %s x%d @ R$%.2f (ID: %d, simulado: %s)",
-        action ,ticker ,quantity ,price ,row_id ,is_simulated ,
+        logger.info(
+            "Trade registrado: %s %s x%d @ R$%.2f (ID: %d, simulado: %s)",
+            action, ticker, quantity, price, row_id, is_simulated,
         )
         return row_id
 
-    def insert_sentiment (
-    self ,
-    ticker :str ,
-    score :float ,
-    source :str ,
-    headline :str |None =None ,
-    timestamp :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — Sentiment
+    # ────────────────────────────────────────────────────────
+
+    def insert_sentiment(
+        self,
+        ticker: str,
+        score: float,
+        source: str,
+        headline: str | None = None,
+        timestamp: str | None = None,
+    ) -> int:
         """
         Registra um score de análise de sentimento.
 
@@ -335,28 +366,32 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        ts =timestamp or _now_brt_iso ()
-        row_id =self ._execute (
-        """INSERT INTO sentiment_scores
+        ts = timestamp or _now_brt_iso()
+        row_id = self._execute(
+            """INSERT INTO sentiment_scores
                (ticker, score, source, headline, timestamp)
                VALUES (?, ?, ?, ?, ?)""",
-        (ticker .upper (),score ,source ,headline ,ts ),
+            (ticker.upper(), score, source, headline, ts),
         )
-        logger .debug (
-        "Sentimento registrado: %s score=%.3f fonte=%s (ID: %d)",
-        ticker ,score ,source ,row_id ,
+        logger.debug(
+            "Sentimento registrado: %s score=%.3f fonte=%s (ID: %d)",
+            ticker, score, source, row_id,
         )
         return row_id
 
-    def insert_snapshot (
-    self ,
-    ticker :str ,
-    price :float ,
-    volume :float |None =None ,
-    bid :float |None =None ,
-    ask :float |None =None ,
-    timestamp :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — Market Snapshot
+    # ────────────────────────────────────────────────────────
+
+    def insert_snapshot(
+        self,
+        ticker: str,
+        price: float,
+        volume: float | None = None,
+        bid: float | None = None,
+        ask: float | None = None,
+        timestamp: str | None = None,
+    ) -> int:
         """
         Registra um snapshot de dados de mercado.
 
@@ -371,25 +406,29 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        ts =timestamp or _now_brt_iso ()
-        return self ._execute (
-        """INSERT INTO market_snapshots
+        ts = timestamp or _now_brt_iso()
+        return self._execute(
+            """INSERT INTO market_snapshots
                (ticker, price, volume, bid, ask, timestamp)
                VALUES (?, ?, ?, ?, ?, ?)""",
-        (ticker .upper (),price ,volume ,bid ,ask ,ts ),
+            (ticker.upper(), price, volume, bid, ask, ts),
         )
 
-    def insert_daily_report (
-    self ,
-    report_date :str |date |None =None ,
-    buys_count :int =0 ,
-    sells_count :int =0 ,
-    free_cash :float =0.0 ,
-    allocated_capital :float =0.0 ,
-    initial_capital :float =0.0 ,
-    total_equity :float =0.0 ,
-    pnl_percent :float =0.0 ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — Daily Report
+    # ────────────────────────────────────────────────────────
+
+    def insert_daily_report(
+        self,
+        report_date: str | date | None = None,
+        buys_count: int = 0,
+        sells_count: int = 0,
+        free_cash: float = 0.0,
+        allocated_capital: float = 0.0,
+        initial_capital: float = 0.0,
+        total_equity: float = 0.0,
+        pnl_percent: float = 0.0,
+    ) -> int:
         """
         Registra ou atualiza o relatório diário.
 
@@ -408,37 +447,41 @@ class DatabaseManager :
         Returns:
             ID do registro inserido/atualizado.
         """
-        if report_date is None :
-            dt_str =_today_brt_iso ()
-        elif isinstance (report_date ,date ):
-            dt_str =report_date .isoformat ()
-        else :
-            dt_str =report_date
+        if report_date is None:
+            dt_str = _today_brt_iso()
+        elif isinstance(report_date, date):
+            dt_str = report_date.isoformat()
+        else:
+            dt_str = report_date
 
-        row_id =self ._execute (
-        """INSERT OR REPLACE INTO daily_reports
+        row_id = self._execute(
+            """INSERT OR REPLACE INTO daily_reports
                (date, buys_count, sells_count, free_cash, allocated_capital,
                 initial_capital, total_equity, pnl_percent)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (dt_str ,buys_count ,sells_count ,free_cash ,
-        allocated_capital ,initial_capital ,total_equity ,pnl_percent ),
+            (dt_str, buys_count, sells_count, free_cash,
+             allocated_capital, initial_capital, total_equity, pnl_percent),
         )
-        logger .info (
-        "Relatório diário registrado: %s | Compras: %d | Vendas: %d | P&L: %.2f%%",
-        dt_str ,buys_count ,sells_count ,pnl_percent ,
+        logger.info(
+            "Relatório diário registrado: %s | Compras: %d | Vendas: %d | P&L: %.2f%%",
+            dt_str, buys_count, sells_count, pnl_percent,
         )
         return row_id
 
-    def insert_decision (
-    self ,
-    ticker :str ,
-    action :str ,
-    confidence :float ,
-    trend_signal :str |None =None ,
-    sentiment_score :float |None =None ,
-    reasoning :str |None =None ,
-    timestamp :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — AI Decision
+    # ────────────────────────────────────────────────────────
+
+    def insert_decision(
+        self,
+        ticker: str,
+        action: str,
+        confidence: float,
+        trend_signal: str | None = None,
+        sentiment_score: float | None = None,
+        reasoning: str | None = None,
+        timestamp: str | None = None,
+    ) -> int:
         """
         Registra uma decisão tomada pela inteligência artificial.
 
@@ -454,28 +497,32 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        ts =timestamp or _now_brt_iso ()
-        row_id =self ._execute (
-        """INSERT INTO ai_decisions
+        ts = timestamp or _now_brt_iso()
+        row_id = self._execute(
+            """INSERT INTO ai_decisions
                (ticker, action, confidence, trend_signal, sentiment_score,
                 reasoning, timestamp)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (ticker .upper (),action .upper (),confidence ,
-        trend_signal ,sentiment_score ,reasoning ,ts ),
+            (ticker.upper(), action.upper(), confidence,
+             trend_signal, sentiment_score, reasoning, ts),
         )
-        logger .info (
-        "Decisão IA registrada: %s %s confiança=%.2f (ID: %d)",
-        action ,ticker ,confidence ,row_id ,
+        logger.info(
+            "Decisão IA registrada: %s %s confiança=%.2f (ID: %d)",
+            action, ticker, confidence, row_id,
         )
         return row_id
 
-    def insert_telegram_log (
-    self ,
-    message_type :str ,
-    content :str ,
-    success :bool =True ,
-    sent_at :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — Telegram Log
+    # ────────────────────────────────────────────────────────
+
+    def insert_telegram_log(
+        self,
+        message_type: str,
+        content: str,
+        success: bool = True,
+        sent_at: str | None = None,
+    ) -> int:
         """
         Registra um log de mensagem do Telegram.
 
@@ -488,21 +535,25 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        ts =sent_at or _now_brt_iso ()
-        return self ._execute (
-        """INSERT INTO telegram_logs
+        ts = sent_at or _now_brt_iso()
+        return self._execute(
+            """INSERT INTO telegram_logs
                (message_type, content, sent_at, success)
                VALUES (?, ?, ?, ?)""",
-        (message_type ,content ,ts ,int (success )),
+            (message_type, content, ts, int(success)),
         )
 
-    def insert_health (
-    self ,
-    cpu_percent :float ,
-    ram_percent :float ,
-    disk_percent :float ,
-    timestamp :str |None =None ,
-    )->int :
+    # ────────────────────────────────────────────────────────
+    # INSERT — System Health
+    # ────────────────────────────────────────────────────────
+
+    def insert_health(
+        self,
+        cpu_percent: float,
+        ram_percent: float,
+        disk_percent: float,
+        timestamp: str | None = None,
+    ) -> int:
         """
         Registra métricas de saúde do sistema.
 
@@ -515,28 +566,80 @@ class DatabaseManager :
         Returns:
             ID do registro inserido.
         """
-        ts =timestamp or _now_brt_iso ()
-        return self ._execute (
-        """INSERT INTO system_health
+        ts = timestamp or _now_brt_iso()
+        return self._execute(
+            """INSERT INTO system_health
                (cpu_percent, ram_percent, disk_percent, timestamp)
                VALUES (?, ?, ?, ?)""",
-        (cpu_percent ,ram_percent ,disk_percent ,ts ),
+            (cpu_percent, ram_percent, disk_percent, ts),
         )
 
-    def get_trades_today (self )->list [dict [str ,Any ]]:
+    # ────────────────────────────────────────────────────────
+    # INSERT — News Items
+    # ────────────────────────────────────────────────────────
+
+    def insert_news(
+        self,
+        title: str,
+        source: str,
+        url: str,
+        ticker: str | None = None,
+        sentiment: float | None = None,
+        published_at: str | None = None,
+    ) -> int | None:
+        """
+        Registra uma notícia coletada no banco de dados.
+
+        Usa INSERT OR IGNORE para deduplicar por URL.
+
+        Args:
+            title: Título da notícia.
+            source: Fonte da notícia (ex: 'Google News', 'InfoMoney').
+            url: URL completa da notícia (unique).
+            ticker: Ticker B3 associado (opcional).
+            sentiment: Score de sentimento (-1.0 a 1.0, opcional).
+            published_at: Timestamp de publicação ISO 8601. Se None, usa agora.
+
+        Returns:
+            ID do registro inserido ou None se duplicado.
+        """
+        pub_ts = published_at or _now_brt_iso()
+        scraped_at = _now_brt_iso()
+        try:
+            row_id = self._execute(
+                """INSERT OR IGNORE INTO news_items
+                   (title, source, url, ticker, sentiment, published_at, scraped_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (title, source, url, ticker, sentiment, pub_ts, scraped_at),
+            )
+            if row_id:
+                logger.debug(
+                    "Notícia registrada: '%s' de %s (ID: %d)",
+                    title[:60], source, row_id,
+                )
+            return row_id if row_id else None
+        except Exception as exc:
+            logger.debug("Notícia duplicada ou erro: %s", exc)
+            return None
+
+    # ────────────────────────────────────────────────────────
+    # QUERY — Trades
+    # ────────────────────────────────────────────────────────
+
+    def get_trades_today(self) -> list[dict[str, Any]]:
         """
         Retorna todos os trades realizados hoje (BRT).
 
         Returns:
             Lista de trades como dicionários.
         """
-        today =_today_brt_iso ()
-        return self ._fetch_all (
-        "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY timestamp DESC",
-        (f"{today }%",),
+        today = _today_brt_iso()
+        return self._fetch_all(
+            "SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY timestamp DESC",
+            (f"{today}%",),
         )
 
-    def get_trade_history (self ,days :int =30 )->list [dict [str ,Any ]]:
+    def get_trade_history(self, days: int = 30) -> list[dict[str, Any]]:
         """
         Retorna o histórico de trades dos últimos N dias.
 
@@ -546,13 +649,17 @@ class DatabaseManager :
         Returns:
             Lista de trades como dicionários, mais recentes primeiro.
         """
-        cutoff =(datetime .now (tz =_BRT )-timedelta (days =days )).isoformat ()
-        return self ._fetch_all (
-        "SELECT * FROM trades WHERE timestamp >= ? ORDER BY timestamp DESC",
-        (cutoff ,),
+        cutoff = (datetime.now(tz=_BRT) - timedelta(days=days)).isoformat()
+        return self._fetch_all(
+            "SELECT * FROM trades WHERE timestamp >= ? ORDER BY timestamp DESC",
+            (cutoff,),
         )
 
-    def get_latest_sentiment (self ,ticker :str )->dict [str ,Any ]|None :
+    # ────────────────────────────────────────────────────────
+    # QUERY — Sentiment
+    # ────────────────────────────────────────────────────────
+
+    def get_latest_sentiment(self, ticker: str) -> dict[str, Any] | None:
         """
         Retorna o score de sentimento mais recente de um ativo.
 
@@ -562,14 +669,14 @@ class DatabaseManager :
         Returns:
             Dicionário com os dados ou None se não encontrar.
         """
-        return self ._fetch_one (
-        """SELECT * FROM sentiment_scores
+        return self._fetch_one(
+            """SELECT * FROM sentiment_scores
                WHERE ticker = ?
                ORDER BY timestamp DESC LIMIT 1""",
-        (ticker .upper (),),
+            (ticker.upper(),),
         )
 
-    def get_sentiments_today (self ,ticker :str |None =None )->list [dict [str ,Any ]]:
+    def get_sentiments_today(self, ticker: str | None = None) -> list[dict[str, Any]]:
         """
         Retorna scores de sentimento de hoje, opcionalmente filtrados por ticker.
 
@@ -579,22 +686,26 @@ class DatabaseManager :
         Returns:
             Lista de scores como dicionários.
         """
-        today =_today_brt_iso ()
-        if ticker :
-            return self ._fetch_all (
-            """SELECT * FROM sentiment_scores
+        today = _today_brt_iso()
+        if ticker:
+            return self._fetch_all(
+                """SELECT * FROM sentiment_scores
                    WHERE ticker = ? AND timestamp LIKE ?
                    ORDER BY timestamp DESC""",
-            (ticker .upper (),f"{today }%"),
+                (ticker.upper(), f"{today}%"),
             )
-        return self ._fetch_all (
-        """SELECT * FROM sentiment_scores
+        return self._fetch_all(
+            """SELECT * FROM sentiment_scores
                WHERE timestamp LIKE ?
                ORDER BY timestamp DESC""",
-        (f"{today }%",),
+            (f"{today}%",),
         )
 
-    def get_daily_report (self ,report_date :str |date |None =None )->dict [str ,Any ]|None :
+    # ────────────────────────────────────────────────────────
+    # QUERY — Daily Reports
+    # ────────────────────────────────────────────────────────
+
+    def get_daily_report(self, report_date: str | date | None = None) -> dict[str, Any] | None:
         """
         Retorna o relatório diário para a data especificada.
 
@@ -604,19 +715,19 @@ class DatabaseManager :
         Returns:
             Dicionário com o relatório ou None se não encontrar.
         """
-        if report_date is None :
-            dt_str =_today_brt_iso ()
-        elif isinstance (report_date ,date ):
-            dt_str =report_date .isoformat ()
-        else :
-            dt_str =report_date
+        if report_date is None:
+            dt_str = _today_brt_iso()
+        elif isinstance(report_date, date):
+            dt_str = report_date.isoformat()
+        else:
+            dt_str = report_date
 
-        return self ._fetch_one (
-        "SELECT * FROM daily_reports WHERE date = ?",
-        (dt_str ,),
+        return self._fetch_one(
+            "SELECT * FROM daily_reports WHERE date = ?",
+            (dt_str,),
         )
 
-    def get_report_history (self ,days :int =30 )->list [dict [str ,Any ]]:
+    def get_report_history(self, days: int = 30) -> list[dict[str, Any]]:
         """
         Retorna os relatórios diários dos últimos N dias.
 
@@ -626,26 +737,30 @@ class DatabaseManager :
         Returns:
             Lista de relatórios como dicionários, mais recentes primeiro.
         """
-        cutoff =(datetime .now (tz =_BRT )-timedelta (days =days )).date ().isoformat ()
-        return self ._fetch_all (
-        "SELECT * FROM daily_reports WHERE date >= ? ORDER BY date DESC",
-        (cutoff ,),
+        cutoff = (datetime.now(tz=_BRT) - timedelta(days=days)).date().isoformat()
+        return self._fetch_all(
+            "SELECT * FROM daily_reports WHERE date >= ? ORDER BY date DESC",
+            (cutoff,),
         )
 
-    def get_decisions_today (self )->list [dict [str ,Any ]]:
+    # ────────────────────────────────────────────────────────
+    # QUERY — AI Decisions
+    # ────────────────────────────────────────────────────────
+
+    def get_decisions_today(self) -> list[dict[str, Any]]:
         """
         Retorna todas as decisões da IA tomadas hoje (BRT).
 
         Returns:
             Lista de decisões como dicionários.
         """
-        today =_today_brt_iso ()
-        return self ._fetch_all (
-        "SELECT * FROM ai_decisions WHERE timestamp LIKE ? ORDER BY timestamp DESC",
-        (f"{today }%",),
+        today = _today_brt_iso()
+        return self._fetch_all(
+            "SELECT * FROM ai_decisions WHERE timestamp LIKE ? ORDER BY timestamp DESC",
+            (f"{today}%",),
         )
 
-    def get_latest_decision (self ,ticker :str )->dict [str ,Any ]|None :
+    def get_latest_decision(self, ticker: str) -> dict[str, Any] | None:
         """
         Retorna a decisão mais recente da IA para um ativo.
 
@@ -655,14 +770,18 @@ class DatabaseManager :
         Returns:
             Dicionário com a decisão ou None se não encontrar.
         """
-        return self ._fetch_one (
-        """SELECT * FROM ai_decisions
+        return self._fetch_one(
+            """SELECT * FROM ai_decisions
                WHERE ticker = ?
                ORDER BY timestamp DESC LIMIT 1""",
-        (ticker .upper (),),
+            (ticker.upper(),),
         )
 
-    def get_latest_snapshot (self ,ticker :str )->dict [str ,Any ]|None :
+    # ────────────────────────────────────────────────────────
+    # QUERY — Market Snapshots
+    # ────────────────────────────────────────────────────────
+
+    def get_latest_snapshot(self, ticker: str) -> dict[str, Any] | None:
         """
         Retorna o snapshot de mercado mais recente de um ativo.
 
@@ -672,57 +791,176 @@ class DatabaseManager :
         Returns:
             Dicionário com o snapshot ou None se não encontrar.
         """
-        return self ._fetch_one (
-        """SELECT * FROM market_snapshots
+        return self._fetch_one(
+            """SELECT * FROM market_snapshots
                WHERE ticker = ?
                ORDER BY timestamp DESC LIMIT 1""",
-        (ticker .upper (),),
+            (ticker.upper(),),
         )
 
-    def get_latest_health (self )->dict [str ,Any ]|None :
+    # ────────────────────────────────────────────────────────
+    # QUERY — System Health
+    # ────────────────────────────────────────────────────────
+
+    def get_latest_health(self) -> dict[str, Any] | None:
         """
         Retorna a métrica de saúde mais recente do sistema.
 
         Returns:
             Dicionário com as métricas ou None se não houver dados.
         """
-        return self ._fetch_one (
-        "SELECT * FROM system_health ORDER BY timestamp DESC LIMIT 1",
+        return self._fetch_one(
+            "SELECT * FROM system_health ORDER BY timestamp DESC LIMIT 1",
         )
 
-    def count_trades_today (self )->dict [str ,int ]:
+    # ────────────────────────────────────────────────────────
+    # QUERY — News Items
+    # ────────────────────────────────────────────────────────
+
+    def get_recent_news(self, limit: int = 50) -> list[dict[str, Any]]:
+        """
+        Retorna as notícias mais recentes do banco.
+
+        Args:
+            limit: Número máximo de notícias a retornar.
+
+        Returns:
+            Lista de notícias como dicionários.
+        """
+        return self._fetch_all(
+            "SELECT * FROM news_items ORDER BY published_at DESC LIMIT ?",
+            (limit,),
+        )
+
+    def get_news_by_ticker(self, ticker: str, limit: int = 20) -> list[dict[str, Any]]:
+        """
+        Retorna notícias de um ticker específico.
+
+        Args:
+            ticker: Código do ativo.
+            limit: Número máximo de resultados.
+
+        Returns:
+            Lista de notícias filtradas.
+        """
+        return self._fetch_all(
+            """SELECT * FROM news_items
+               WHERE ticker = ?
+               ORDER BY published_at DESC LIMIT ?""",
+            (ticker.upper(), limit),
+        )
+
+    # ────────────────────────────────────────────────────────
+    # QUERY — AI Decisions History
+    # ────────────────────────────────────────────────────────
+
+    def get_decisions_history(
+        self, ticker: str | None = None, days: int = 30, limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """
+        Retorna histórico de decisões da IA, opcionalmente por ticker.
+
+        Args:
+            ticker: Código do ativo (opcional — se None, retorna todos).
+            days: Número de dias para consultar.
+            limit: Número máximo de resultados.
+
+        Returns:
+            Lista de decisões como dicionários.
+        """
+        cutoff = (datetime.now(tz=_BRT) - timedelta(days=days)).isoformat()
+        if ticker:
+            return self._fetch_all(
+                """SELECT * FROM ai_decisions
+                   WHERE ticker = ? AND timestamp >= ?
+                   ORDER BY timestamp DESC LIMIT ?""",
+                (ticker.upper(), cutoff, limit),
+            )
+        return self._fetch_all(
+            """SELECT * FROM ai_decisions
+               WHERE timestamp >= ?
+               ORDER BY timestamp DESC LIMIT ?""",
+            (cutoff, limit),
+        )
+
+    def get_performance_metrics(self) -> dict[str, Any]:
+        """
+        Calcula métricas de desempenho do bot a partir do histórico de trades.
+
+        Returns:
+            Dicionário com win_rate, total_trades, total_buys, total_sells,
+            avg_trade_value, recent_pnl.
+        """
+        trades = self._fetch_all(
+            "SELECT * FROM trades ORDER BY timestamp DESC LIMIT 500",
+        )
+        reports = self._fetch_all(
+            "SELECT * FROM daily_reports ORDER BY date DESC LIMIT 30",
+        )
+
+        total_trades = len(trades)
+        total_buys = sum(1 for t in trades if t.get('action') == 'BUY')
+        total_sells = sum(1 for t in trades if t.get('action') == 'SELL')
+
+        # P&L dos relatórios diários
+        pnl_values = [r.get('pnl_percent', 0.0) for r in reports if r.get('pnl_percent')]
+        positive_days = sum(1 for p in pnl_values if p > 0)
+        negative_days = sum(1 for p in pnl_values if p < 0)
+        win_rate = (positive_days / len(pnl_values) * 100) if pnl_values else 0.0
+        avg_pnl = sum(pnl_values) / len(pnl_values) if pnl_values else 0.0
+
+        # Max drawdown
+        max_drawdown = min(pnl_values) if pnl_values else 0.0
+
+        return {
+            'total_trades': total_trades,
+            'total_buys': total_buys,
+            'total_sells': total_sells,
+            'days_tracked': len(pnl_values),
+            'positive_days': positive_days,
+            'negative_days': negative_days,
+            'win_rate': round(win_rate, 1),
+            'avg_daily_pnl': round(avg_pnl, 2),
+            'max_drawdown': round(max_drawdown, 2),
+        }
+
+    # ────────────────────────────────────────────────────────
+    # Utilitários
+    # ────────────────────────────────────────────────────────
+
+    def count_trades_today(self) -> dict[str, int]:
         """
         Conta compras e vendas realizadas hoje.
 
         Returns:
             Dicionário com chaves 'buys' e 'sells'.
         """
-        today =_today_brt_iso ()
-        result ={"buys":0 ,"sells":0 }
+        today = _today_brt_iso()
+        result = {"buys": 0, "sells": 0}
 
-        rows =self ._fetch_all (
-        """SELECT action, COUNT(*) as cnt
+        rows = self._fetch_all(
+            """SELECT action, COUNT(*) as cnt
                FROM trades
                WHERE timestamp LIKE ?
                GROUP BY action""",
-        (f"{today }%",),
+            (f"{today}%",),
         )
-        for row in rows :
-            if row ["action"]=="BUY":
-                result ["buys"]=row ["cnt"]
-            elif row ["action"]=="SELL":
-                result ["sells"]=row ["cnt"]
+        for row in rows:
+            if row["action"] == "BUY":
+                result["buys"] = row["cnt"]
+            elif row["action"] == "SELL":
+                result["sells"] = row["cnt"]
 
         return result
 
-    def close (self )->None :
+    def close(self) -> None:
         """
         Encerra o gerenciador de banco de dados.
 
         Atualmente é um no-op já que conexões são fechadas via context manager,
         mas mantido para compatibilidade futura com pools de conexão.
         """
-        logger .info ("DatabaseManager encerrado para: %s",self .db_path )
+        logger.info("DatabaseManager encerrado para: %s", self.db_path)
 
-    def __repr__ (self )->str :
-        return f"DatabaseManager(db_path={self .db_path })"
+    def __repr__(self) -> str:
+        return f"DatabaseManager(db_path={self.db_path})"

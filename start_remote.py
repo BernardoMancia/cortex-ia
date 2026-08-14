@@ -5,13 +5,13 @@ import os
 ssh =paramiko .SSHClient ()
 ssh .set_missing_host_key_policy (paramiko .AutoAddPolicy ())
 
-_host =os .getenv ("DEPLOY_HOST","82.112.245.99")
-_user =os .getenv ("DEPLOY_USER","servico")
-_password =os .getenv ("DEPLOY_PASSWORD","")
-if not _password :
-    raise ValueError ("DEPLOY_PASSWORD environment variable is required.")
-ssh .connect (_host ,22 ,_user ,_password )
-rd ='/home/servico/cortex-ia'
+_host = os.getenv("DEPLOY_HOST", "")
+_user = os.getenv("DEPLOY_USER", "")
+_password = os.getenv("DEPLOY_PASSWORD", "")
+if not _host or not _password or not _user:
+    raise ValueError("DEPLOY_HOST, DEPLOY_USER and DEPLOY_PASSWORD environment variables are required.")
+ssh.connect(_host, int(os.getenv("DEPLOY_PORT", "22")), _user, _password)
+rd = os.getenv("DEPLOY_REMOTE_DIR", "~/cortex-ia")
 
 print ("Killing existing processes...")
 ssh .exec_command ('pkill -f "python.*main.py" 2>/dev/null || true')

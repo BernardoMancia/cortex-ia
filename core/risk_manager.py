@@ -19,60 +19,102 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from config .settings import settings
-from models .data_models import BRT ,Position
+from config.settings import settings
+from models.data_models import BRT, Position
 
-logger =logging .getLogger ('cortex.risk_manager')
+logger = logging.getLogger('cortex.risk_manager')
 
-class RiskManager :
+
+class RiskManager:
     """Gerenciador de risco para operações no mercado fracionário da B3."""
 
-    MIN_SHARES :int =1
-    MAX_SHARES :int =99
+    # Limites do mercado fracionário
+    MIN_SHARES: int = 1
+    MAX_SHARES: int = 99
 
-    MAX_CONCENTRATION :float =0.30
-    DAILY_LOSS_LIMIT :float =-0.05
-    TRAILING_STOP_ACTIVATION :float =0.05
+    # Limites de risco
+    MAX_CONCENTRATION: float = 0.30  # Máximo 30% do capital por ativo
+    DAILY_LOSS_LIMIT: float = -0.05  # -5% de perda diária encerra operações
+    TRAILING_STOP_ACTIVATION: float = 0.05  # Ativar trailing stop após +5%
 
-    def __init__ (self ,stop_loss_percent :float =settings .STOP_LOSS_PERCENT )->None :
+    def __init__(self, stop_loss_percent: float = settings.STOP_LOSS_PERCENT) -> None:
         """
         Inicializa o gerenciador de risco.
 
         Args:
             stop_loss_percent: Percentual de perda máxima tolerada (0.10 = 10%).
         """
-        self .stop_loss_percent =stop_loss_percent
-        self ._daily_pnl :float =0.0
-        self ._circuit_breaker_active :bool =False
-        self ._last_reset_date :Optional [str ]=None
-        logger .info (
-        'RiskManager inicializado — stop-loss: %.1f%%, concentração max: %.0f%%, '
-        'circuit breaker: %.1f%%',
-        self .stop_loss_percent *100 ,
-        self .MAX_CONCENTRATION *100 ,
-        self .DAILY_LOSS_LIMIT *100 ,
+        self.stop_loss_percent = stop_loss_percent
+        self._daily_pnl: float = 0.0
+        self._circuit_breaker_active: bool = False
+        self._last_reset_date: Optional[str] = None
+        logger.info(
+            'RiskManager inicializado — stop-loss: %.1f%%, concentração max: %.0f%%, '
+            'circuit breaker: %.1f%%',
+            self.stop_loss_percent * 100,
+            self.MAX_CONCENTRATION * 100,
+            self.DAILY_LOSS_LIMIT * 100,
         )
 
-    def calculate_stop_loss (self ,entry_price :float )->float :
+    def check_take_profit_triggers(self, positions: list[Position]) -> list[Position]:
         """
-        Calcula o preço de stop-loss para uma entrada.
+        Verifica se alguma posição atingiu o alvo de lucro parcial (15%).
+        Retorna posições que devem ter 50% do volume vendido.
+        """
+        triggered: list[Position] = []
+        TAKE_PROFIT_ACTIVATION = 0.15
 
-        P_stop = entry_price * (1 - settings.STOP_LOSS_PERCENT)
+        for position in positions:
+            if getattr(position, 'partial_exit_done', False):
+                continue
+            
+            if position.current_price is None or position.current_price <= 0:
+                continue
+
+            gain_pct = (position.current_price - position.entry_price) / position.entry_price
+            if gain_pct >= TAKE_PROFIT_ACTIVATION:
+                triggered.append(position)
+                logger.info(
+                    '🎯 TAKE-PROFIT PARCIAL ATINGIDO: %s — lucro de +%.1f%%',
+                    position.ticker, gain_pct * 100
+                )
+
+        return triggered
+
+    def calculate_stop_loss(self, entry_price: float, atr: float | None = None) -> float:
+        """
+        Calcula o preço de stop-loss adaptativo.
+
+        P_stop = max(
+            entry_price - 1.5 * ATR (se disponível),
+            entry_price * (1 - settings.STOP_LOSS_PERCENT)
+        )
 
         Args:
             entry_price: Preço de entrada da posição.
+            atr: Average True Range (opcional).
 
         Returns:
             Preço de stop-loss calculado.
         """
-        stop_price =entry_price *(1.0 -self .stop_loss_percent )
-        logger .debug (
-        'Stop-loss calculado: entrada R$ %.2f → stop R$ %.2f (%.1f%%)',
-        entry_price ,stop_price ,self .stop_loss_percent *100 ,
-        )
+        fixed_stop = entry_price * (1.0 - self.stop_loss_percent)
+        
+        if atr and atr > 0:
+            atr_stop = entry_price - (1.5 * atr)
+            stop_price = max(atr_stop, fixed_stop)
+            logger.debug(
+                'Stop-loss adaptativo calculado: entrada R$ %.2f, ATR %.2f → stop R$ %.2f',
+                entry_price, atr, stop_price
+            )
+        else:
+            stop_price = fixed_stop
+            logger.debug(
+                'Stop-loss fixo calculado: entrada R$ %.2f → stop R$ %.2f (%.1f%%)',
+                entry_price, stop_price, self.stop_loss_percent * 100,
+            )
         return stop_price
 
-    def update_trailing_stop (self ,position :Position )->bool :
+    def update_trailing_stop(self, position: Position) -> bool:
         """
         Atualiza stop-loss com trailing stop quando posição tem lucro.
 
@@ -87,34 +129,36 @@ class RiskManager :
         Returns:
             True se o stop-loss foi atualizado, False caso contrário.
         """
-        if position .current_price is None or position .current_price <=0 :
+        if position.current_price is None or position.current_price <= 0:
             return False
 
-        gain_pct =(position .current_price -position .entry_price )/position .entry_price
+        # Calcular ganho atual
+        gain_pct = (position.current_price - position.entry_price) / position.entry_price
 
-        if gain_pct <self .TRAILING_STOP_ACTIVATION :
+        if gain_pct < self.TRAILING_STOP_ACTIVATION:
             return False
 
-        new_stop =position .current_price *(1.0 -self .stop_loss_percent )
+        # Calcular novo stop baseado no preço atual
+        new_stop = position.current_price * (1.0 - self.stop_loss_percent)
 
-        if new_stop >position .stop_loss :
-            old_stop =position .stop_loss
-            position .stop_loss =round (new_stop ,2 )
-            logger .info (
-            '📈 TRAILING STOP atualizado: %s — R$ %.2f → R$ %.2f '
-            '(preço atual: R$ %.2f, ganho: +%.1f%%)',
-            position .ticker ,old_stop ,position .stop_loss ,
-            position .current_price ,gain_pct *100 ,
+        if new_stop > position.stop_loss:
+            old_stop = position.stop_loss
+            position.stop_loss = round(new_stop, 2)
+            logger.info(
+                '📈 TRAILING STOP atualizado: %s — R$ %.2f → R$ %.2f '
+                '(preço atual: R$ %.2f, ganho: +%.1f%%)',
+                position.ticker, old_stop, position.stop_loss,
+                position.current_price, gain_pct * 100,
             )
             return True
 
         return False
 
-    def check_stop_loss_triggers (
-    self ,
-    positions :list [Position ],
-    market_data :object ,
-    )->list [Position ]:
+    def check_stop_loss_triggers(
+        self,
+        positions: list[Position],
+        market_data: object,
+    ) -> list[Position]:
         """
         Verifica gatilhos de stop-loss para todas as posições.
 
@@ -132,85 +176,89 @@ class RiskManager :
         Returns:
             Lista de posições cujo stop-loss foi ativado.
         """
-        triggered :list [Position ]=[]
+        triggered: list[Position] = []
 
-        for position in positions :
-            try :
-                price_data =getattr (market_data ,'get_current_price',lambda t :None )(
-                position .ticker
+        for position in positions:
+            try:
+                price_data = getattr(market_data, 'get_current_price', lambda t: None)(
+                    position.ticker
                 )
 
-                if isinstance (price_data ,dict ):
-                    current_price =price_data .get ('last')
-                else :
-                    current_price =price_data
+                # get_current_price() retorna dict {"last": ..., "bid": ...}
+                if isinstance(price_data, dict):
+                    current_price = price_data.get('last')
+                else:
+                    current_price = price_data
 
-                if current_price is None :
+                if current_price is None:
+                    # Usar preço em cache na posição se disponível
+                    current_price = position.current_price
 
-                    current_price =position .current_price
-
-                if current_price is None or current_price <=0 :
-                    logger .warning (
-                    'Preço indisponível para %s — não é possível verificar stop-loss',
-                    position .ticker ,
+                if current_price is None or current_price <= 0:
+                    logger.warning(
+                        'Preço indisponível para %s — não é possível verificar stop-loss',
+                        position.ticker,
                     )
                     continue
 
-                position .current_price =current_price
+                # Atualizar preço atual na posição
+                position.current_price = current_price
 
-                self .update_trailing_stop (position )
+                # Atualizar trailing stop se posição em lucro
+                self.update_trailing_stop(position)
 
-                if current_price <=position .stop_loss :
-                    triggered .append (position )
-                    logger .warning (
-                    '🚨 STOP-LOSS ATIVADO: %s — preço R$ %.2f <= SL R$ %.2f '
-                    '(entrada R$ %.2f, perda %.1f%%)',
-                    position .ticker ,
-                    current_price ,
-                    position .stop_loss ,
-                    position .entry_price ,
-                    ((current_price -position .entry_price )/position .entry_price )*100 ,
+                if current_price <= position.stop_loss:
+                    triggered.append(position)
+                    logger.warning(
+                        '🚨 STOP-LOSS ATIVADO: %s — preço R$ %.2f <= SL R$ %.2f '
+                        '(entrada R$ %.2f, perda %.1f%%)',
+                        position.ticker,
+                        current_price,
+                        position.stop_loss,
+                        position.entry_price,
+                        ((current_price - position.entry_price) / position.entry_price) * 100,
                     )
-                else :
-                    distance_pct =(
-                    (current_price -position .stop_loss )/position .stop_loss
-                    )*100
-                    logger .debug (
-                    'Stop-loss OK: %s — preço R$ %.2f, SL R$ %.2f (distância: +%.1f%%)',
-                    position .ticker ,
-                    current_price ,
-                    position .stop_loss ,
-                    distance_pct ,
+                else:
+                    distance_pct = (
+                        (current_price - position.stop_loss) / position.stop_loss
+                    ) * 100
+                    logger.debug(
+                        'Stop-loss OK: %s — preço R$ %.2f, SL R$ %.2f (distância: +%.1f%%)',
+                        position.ticker,
+                        current_price,
+                        position.stop_loss,
+                        distance_pct,
                     )
 
-            except Exception as e :
-                logger .error (
-                'Erro ao verificar stop-loss de %s: %s',
-                position .ticker ,e ,
+            except Exception as e:
+                logger.error(
+                    'Erro ao verificar stop-loss de %s: %s',
+                    position.ticker, e,
                 )
 
-        if triggered :
-            logger .warning (
-            '⚠️ %d posição(ões) com stop-loss ativado: %s',
-            len (triggered ),
-            ', '.join (p .ticker for p in triggered ),
+        if triggered:
+            logger.warning(
+                '⚠️ %d posição(ões) com stop-loss ativado: %s',
+                len(triggered),
+                ', '.join(p.ticker for p in triggered),
             )
-        else :
-            logger .debug (
-            'Verificação de stop-loss concluída — %d posições OK',
-            len (positions ),
+        else:
+            logger.debug(
+                'Verificação de stop-loss concluída — %d posições OK',
+                len(positions),
             )
 
         return triggered
 
-    def validate_order (
-    self ,
-    ticker :str ,
-    quantity :int ,
-    price :float ,
-    available_capital :float ,
-    total_portfolio_value :float =0.0 ,
-    )->tuple [bool ,str ]:
+    def validate_order(
+        self,
+        ticker: str,
+        quantity: int,
+        price: float,
+        available_capital: float,
+        total_portfolio_value: float = 0.0,
+        positions: list[Position] | None = None,
+    ) -> tuple[bool, str]:
         """
         Valida uma ordem antes da execução.
 
@@ -219,6 +267,7 @@ class RiskManager :
         2. Quantidade dentro do intervalo [1, 99] (mercado fracionário).
         3. Custo total (price * quantity) dentro do capital disponível.
         4. Concentração máxima por ativo não excede MAX_CONCENTRATION.
+        5. Concentração setorial não excede settings.MAX_SECTOR_EXPOSURE.
 
         Args:
             ticker: Código do ativo.
@@ -226,76 +275,100 @@ class RiskManager :
             price: Preço unitário.
             available_capital: Capital disponível para a operação.
             total_portfolio_value: Valor total do portfólio (para concentração).
+            positions: Lista de posições atuais do portfólio (para concentração setorial).
 
         Returns:
             Tupla (is_valid, reason_if_invalid).
             Se válida: (True, 'Ordem válida').
             Se inválida: (False, 'motivo da rejeição').
         """
-
-        if self ._circuit_breaker_active :
-            reason =(
-            f'Circuit breaker ativo — operações suspensas '
-            f'(perda diária: {self ._daily_pnl *100 :.1f}%)'
+        # Verificar circuit breaker
+        if self._circuit_breaker_active:
+            reason = (
+                f'Circuit breaker ativo — operações suspensas '
+                f'(perda diária: {self._daily_pnl*100:.1f}%)'
             )
-            logger .warning ('Ordem rejeitada para %s: %s',ticker ,reason )
-            return False ,reason
+            logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+            return False, reason
 
-        if quantity <self .MIN_SHARES :
-            reason =(
-            f'Quantidade inválida: {quantity } < {self .MIN_SHARES } '
-            f'(mínimo para mercado fracionário)'
+        # Validar quantidade no mercado fracionário
+        if quantity < self.MIN_SHARES:
+            reason = (
+                f'Quantidade inválida: {quantity} < {self.MIN_SHARES} '
+                f'(mínimo para mercado fracionário)'
             )
-            logger .warning ('Ordem rejeitada para %s: %s',ticker ,reason )
-            return False ,reason
+            logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+            return False, reason
 
-        if quantity >self .MAX_SHARES :
-            reason =(
-            f'Quantidade inválida: {quantity } > {self .MAX_SHARES } '
-            f'(máximo para mercado fracionário)'
+        if quantity > self.MAX_SHARES:
+            reason = (
+                f'Quantidade inválida: {quantity} > {self.MAX_SHARES} '
+                f'(máximo para mercado fracionário)'
             )
-            logger .warning ('Ordem rejeitada para %s: %s',ticker ,reason )
-            return False ,reason
+            logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+            return False, reason
 
-        total_cost =price *quantity
-        if total_cost >available_capital :
-            reason =(
-            f'Capital insuficiente: R$ {total_cost :.2f} necessário, '
-            f'R$ {available_capital :.2f} disponível'
+        # Validar capital disponível
+        total_cost = price * quantity
+        if total_cost > available_capital:
+            reason = (
+                f'Capital insuficiente: R$ {total_cost:.2f} necessário, '
+                f'R$ {available_capital:.2f} disponível'
             )
-            logger .warning ('Ordem rejeitada para %s: %s',ticker ,reason )
-            return False ,reason
+            logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+            return False, reason
 
-        if total_portfolio_value >0 :
-            concentration =total_cost /total_portfolio_value
-            if concentration >self .MAX_CONCENTRATION :
-                reason =(
-                f'Concentração excessiva: {concentration *100 :.1f}% > '
-                f'{self .MAX_CONCENTRATION *100 :.0f}% máximo permitido'
+        # Validar concentração máxima por ativo e por setor
+        if total_portfolio_value > 0:
+            concentration = total_cost / total_portfolio_value
+            if concentration > self.MAX_CONCENTRATION:
+                reason = (
+                    f'Concentração excessiva: {concentration*100:.1f}% > '
+                    f'{self.MAX_CONCENTRATION*100:.0f}% máximo permitido'
                 )
-                logger .warning ('Ordem rejeitada para %s: %s',ticker ,reason )
-                return False ,reason
+                logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+                return False, reason
 
-        logger .info (
-        'Ordem validada: %s — %d ações @ R$ %.2f = R$ %.2f '
-        '(capital disponível: R$ %.2f)',
-        ticker ,quantity ,price ,total_cost ,available_capital ,
+            if positions is not None:
+                sector = settings.SECTOR_MAP.get(ticker, 'Desconhecido')
+                sector_exposure = total_cost
+                for p in positions:
+                    if settings.SECTOR_MAP.get(p.ticker, 'Desconhecido') == sector:
+                        sector_exposure += (p.current_value or (p.quantity * p.entry_price))
+                
+                sector_concentration = sector_exposure / total_portfolio_value
+                if sector_concentration > settings.MAX_SECTOR_EXPOSURE:
+                    reason = (
+                        f'Concentração setorial excessiva ({sector}): {sector_concentration*100:.1f}% > '
+                        f'{settings.MAX_SECTOR_EXPOSURE*100:.0f}% máximo permitido'
+                    )
+                    logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+                    return False, reason
+
+        # Ordem válida
+        logger.info(
+            'Ordem validada: %s — %d ações @ R$ %.2f = R$ %.2f '
+            '(capital disponível: R$ %.2f)',
+            ticker, quantity, price, total_cost, available_capital,
         )
-        return True ,'Ordem válida'
+        return True, 'Ordem válida'
 
-    def get_max_shares (
-    self ,
-    price :float ,
-    available_capital :float ,
-    confidence :float =1.0 ,
-    total_portfolio_value :float =0.0 ,
-    )->int :
+    def get_max_shares(
+        self,
+        price: float,
+        available_capital: float,
+        confidence: float = 1.0,
+        total_portfolio_value: float = 0.0,
+        positions: list[Position] | None = None,
+        ticker: str = "",
+    ) -> int:
         """
         Calcula a quantidade máxima de ações que podem ser compradas.
 
         Leva em conta:
         - Capital disponível
         - Concentração máxima por ativo
+        - Concentração setorial máxima
         - Confiança da decisão (modula tamanho: alta confiança = mais ações)
         - Limite do mercado fracionário (1-99)
 
@@ -304,77 +377,95 @@ class RiskManager :
             available_capital: Capital disponível.
             confidence: Nível de confiança da decisão (0.0 a 1.0).
             total_portfolio_value: Valor total do portfólio.
+            positions: Posições atuais para cálculo de setor.
+            ticker: Ticker alvo (necessário se positions for passado).
 
         Returns:
             Quantidade máxima de ações (0 se insuficiente, máx 99).
         """
-        if price <=0 or available_capital <=0 :
-            logger .debug (
-            'Cálculo de max_shares: preço=%.2f, capital=%.2f → 0',
-            price ,available_capital ,
+        if price <= 0 or available_capital <= 0:
+            logger.debug(
+                'Cálculo de max_shares: preço=%.2f, capital=%.2f → 0',
+                price, available_capital,
             )
             return 0
 
-        max_by_capital =int (available_capital /price )
+        # Limite por capital disponível
+        max_by_capital = int(available_capital / price)
 
-        if total_portfolio_value >0 :
-            max_by_concentration =int (
-            (total_portfolio_value *self .MAX_CONCENTRATION )/price
+        # Limite por concentração
+        if total_portfolio_value > 0:
+            max_by_concentration = int(
+                (total_portfolio_value * self.MAX_CONCENTRATION) / price
             )
-            max_shares =min (max_by_capital ,max_by_concentration )
-        else :
-            max_shares =max_by_capital
+            
+            max_by_sector = max_by_capital
+            if positions is not None and ticker:
+                sector = settings.SECTOR_MAP.get(ticker, 'Desconhecido')
+                current_sector_exposure = 0.0
+                for p in positions:
+                    if settings.SECTOR_MAP.get(p.ticker, 'Desconhecido') == sector:
+                        current_sector_exposure += (p.current_value or (p.quantity * p.entry_price))
+                
+                allowed_sector_capital = (settings.MAX_SECTOR_EXPOSURE * total_portfolio_value) - current_sector_exposure
+                max_by_sector = int(max(0, allowed_sector_capital) / price)
+                
+            max_shares = min(max_by_capital, max_by_concentration, max_by_sector)
+        else:
+            max_shares = max_by_capital
 
-        if confidence <0.5 :
-            confidence_factor =0.5
-        elif confidence <0.7 :
-            confidence_factor =0.7
-        else :
-            confidence_factor =1.0
+        # Modular por confiança (confiança < 0.5 → metade, >= 0.8 → 100%)
+        if confidence < 0.5:
+            confidence_factor = 0.5
+        elif confidence < 0.7:
+            confidence_factor = 0.7
+        else:
+            confidence_factor = 1.0
 
-        max_shares =int (max_shares *confidence_factor )
+        max_shares = int(max_shares * confidence_factor)
 
-        result =max (0 ,min (max_shares ,self .MAX_SHARES ))
+        # Aplicar limites do mercado fracionário
+        result = max(0, min(max_shares, self.MAX_SHARES))
 
-        logger .debug (
-        'Max shares: preço R$ %.2f, capital R$ %.2f, confiança %.0f%% → %d ações '
-        '(custo total: R$ %.2f)',
-        price ,available_capital ,confidence *100 ,result ,price *result ,
+        logger.debug(
+            'Max shares: preço R$ %.2f, capital R$ %.2f, confiança %.0f%% → %d ações '
+            '(custo total: R$ %.2f)',
+            price, available_capital, confidence * 100, result, price * result,
         )
         return result
 
-    def update_daily_pnl (self ,pnl_percent :float )->None :
+    def update_daily_pnl(self, pnl_percent: float) -> None:
         """
         Atualiza o P&L diário e verifica circuit breaker.
 
         Args:
             pnl_percent: Variação percentual do portfólio no dia (ex: -0.03 = -3%).
         """
-        today =datetime .now (BRT ).strftime ('%Y-%m-%d')
-        if self ._last_reset_date !=today :
-            self ._daily_pnl =0.0
-            self ._circuit_breaker_active =False
-            self ._last_reset_date =today
+        today = datetime.now(BRT).strftime('%Y-%m-%d')
+        if self._last_reset_date != today:
+            self._daily_pnl = 0.0
+            self._circuit_breaker_active = False
+            self._last_reset_date = today
 
-        self ._daily_pnl =pnl_percent
+        self._daily_pnl = pnl_percent
 
-        if pnl_percent <=self .DAILY_LOSS_LIMIT and not self ._circuit_breaker_active :
-            self ._circuit_breaker_active =True
-            logger .warning (
-            '🛑 CIRCUIT BREAKER ATIVADO — Perda diária de %.1f%% '
-            'excede limite de %.1f%%. Operações suspensas até amanhã.',
-            pnl_percent *100 ,
-            self .DAILY_LOSS_LIMIT *100 ,
+        if pnl_percent <= self.DAILY_LOSS_LIMIT and not self._circuit_breaker_active:
+            self._circuit_breaker_active = True
+            logger.warning(
+                '🛑 CIRCUIT BREAKER ATIVADO — Perda diária de %.1f%% '
+                'excede limite de %.1f%%. Operações suspensas até amanhã.',
+                pnl_percent * 100,
+                self.DAILY_LOSS_LIMIT * 100,
             )
 
-    def reset_daily_limits (self )->None :
+    def reset_daily_limits(self) -> None:
         """Reseta limites diários (chamado no início de cada dia)."""
-        self ._daily_pnl =0.0
-        self ._circuit_breaker_active =False
-        self ._last_reset_date =datetime .now (BRT ).strftime ('%Y-%m-%d')
-        logger .debug ('Limites diários de risco resetados')
+        self._daily_pnl = 0.0
+        self._circuit_breaker_active = False
+        self._last_reset_date = datetime.now(BRT).strftime('%Y-%m-%d')
+        logger.debug('Limites diários de risco resetados')
 
     @property
-    def is_circuit_breaker_active (self )->bool :
+    def is_circuit_breaker_active(self) -> bool:
         """Retorna se o circuit breaker está ativo."""
-        return self ._circuit_breaker_active
+        return self._circuit_breaker_active

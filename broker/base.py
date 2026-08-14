@@ -9,34 +9,45 @@ devem seguir.
 from __future__ import annotations
 
 import logging
-from abc import ABC ,abstractmethod
-from dataclasses import dataclass ,field
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 
 from zoneinfo import ZoneInfo
 
-logger =logging .getLogger ("cortex.broker")
+logger = logging.getLogger("cortex.broker")
 
-BRT :ZoneInfo =ZoneInfo ("America/Sao_Paulo")
+BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
 
-class OrderType (Enum ):
+
+# ═══════════════════════════════════════════════════════════════════
+#  Enums
+# ═══════════════════════════════════════════════════════════════════
+
+class OrderType(Enum):
     """Tipo de ordem: compra ou venda."""
 
-    BUY ="BUY"
-    SELL ="SELL"
+    BUY = "BUY"
+    SELL = "SELL"
 
-class OrderStatus (Enum ):
+
+class OrderStatus(Enum):
     """Status de uma ordem enviada ao mercado."""
 
-    PENDING ="PENDING"
-    FILLED ="FILLED"
-    REJECTED ="REJECTED"
-    CANCELLED ="CANCELLED"
+    PENDING = "PENDING"
+    FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    CANCELLED = "CANCELLED"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Dataclasses de domínio
+# ═══════════════════════════════════════════════════════════════════
 
 @dataclass
-class Order :
+class Order:
     """
     Representa uma ordem de compra ou venda.
 
@@ -52,45 +63,46 @@ class Order :
         comment: Comentário descritivo sobre a ordem.
     """
 
-    ticker :str
-    order_type :OrderType
-    quantity :int
-    price :float
-    stop_loss :Optional [float ]=None
-    status :OrderStatus =OrderStatus .PENDING
-    ticket :Optional [int ]=None
-    timestamp :datetime =field (default_factory =lambda :datetime .now (tz =BRT ))
-    comment :str =""
+    ticker: str
+    order_type: OrderType
+    quantity: int
+    price: float
+    stop_loss: Optional[float] = None
+    status: OrderStatus = OrderStatus.PENDING
+    ticket: Optional[int] = None
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=BRT))
+    comment: str = ""
 
-    def __post_init__ (self )->None :
+    def __post_init__(self) -> None:
         """Valida campos básicos e normaliza ticker."""
-        if self .quantity <0 :
-            raise ValueError (f"Quantidade inválida: {self .quantity }. Deve ser >= 0.")
-        if self .price <0 :
-            raise ValueError (f"Preço inválido: {self .price }. Deve ser >= 0.")
-        self .ticker =self .ticker .upper ().strip ()
+        if self.quantity < 0:
+            raise ValueError(f"Quantidade inválida: {self.quantity}. Deve ser >= 0.")
+        if self.price < 0:
+            raise ValueError(f"Preço inválido: {self.price}. Deve ser >= 0.")
+        self.ticker = self.ticker.upper().strip()
 
     @property
-    def total_value (self )->float :
+    def total_value(self) -> float:
         """Valor total da ordem (quantidade × preço)."""
-        return round (self .quantity *self .price ,2 )
+        return round(self.quantity * self.price, 2)
 
-    def to_dict (self )->dict :
+    def to_dict(self) -> dict:
         """Serializa a ordem para dicionário."""
         return {
-        "ticker":self .ticker ,
-        "order_type":self .order_type .value ,
-        "quantity":self .quantity ,
-        "price":self .price ,
-        "stop_loss":self .stop_loss ,
-        "status":self .status .value ,
-        "ticket":self .ticket ,
-        "timestamp":self .timestamp .isoformat (),
-        "comment":self .comment ,
+            "ticker": self.ticker,
+            "order_type": self.order_type.value,
+            "quantity": self.quantity,
+            "price": self.price,
+            "stop_loss": self.stop_loss,
+            "status": self.status.value,
+            "ticket": self.ticket,
+            "timestamp": self.timestamp.isoformat(),
+            "comment": self.comment,
         }
 
+
 @dataclass
-class Position :
+class Position:
     """
     Representa uma posição aberta no portfólio.
 
@@ -104,60 +116,65 @@ class Position :
         timestamp: Data/hora de abertura (timezone-aware, BRT).
     """
 
-    ticker :str
-    quantity :int
-    entry_price :float
-    current_price :float
-    stop_loss :float
-    ticket :int
-    timestamp :datetime
+    ticker: str
+    quantity: int
+    entry_price: float
+    current_price: float
+    stop_loss: float
+    ticket: int
+    timestamp: datetime
 
-    def __post_init__ (self )->None :
+    def __post_init__(self) -> None:
         """Normaliza ticker e valida campos."""
-        self .ticker =self .ticker .upper ().strip ()
-        if self .quantity <=0 :
-            raise ValueError (f"Quantidade da posição inválida: {self .quantity }")
-        if self .entry_price <=0 :
-            raise ValueError (f"Preço de entrada inválido: {self .entry_price }")
+        self.ticker = self.ticker.upper().strip()
+        if self.quantity <= 0:
+            raise ValueError(f"Quantidade da posição inválida: {self.quantity}")
+        if self.entry_price <= 0:
+            raise ValueError(f"Preço de entrada inválido: {self.entry_price}")
 
     @property
-    def pnl (self )->float :
+    def pnl(self) -> float:
         """Lucro ou prejuízo absoluto (em R$)."""
-        return round ((self .current_price -self .entry_price )*self .quantity ,2 )
+        return round((self.current_price - self.entry_price) * self.quantity, 2)
 
     @property
-    def pnl_percent (self )->float :
+    def pnl_percent(self) -> float:
         """Lucro ou prejuízo percentual em relação ao preço de entrada."""
-        if self .entry_price ==0 :
+        if self.entry_price == 0:
             return 0.0
-        return round (((self .current_price -self .entry_price )/self .entry_price )*100 ,2 )
+        return round(((self.current_price - self.entry_price) / self.entry_price) * 100, 2)
 
     @property
-    def total_value (self )->float :
+    def total_value(self) -> float:
         """Valor de mercado atual da posição (quantidade × preço atual)."""
-        return round (self .current_price *self .quantity ,2 )
+        return round(self.current_price * self.quantity, 2)
 
     @property
-    def invested_value (self )->float :
+    def invested_value(self) -> float:
         """Valor investido na entrada da posição."""
-        return round (self .entry_price *self .quantity ,2 )
+        return round(self.entry_price * self.quantity, 2)
 
-    def to_dict (self )->dict :
+    def to_dict(self) -> dict:
         """Serializa a posição para dicionário."""
         return {
-        "ticker":self .ticker ,
-        "quantity":self .quantity ,
-        "entry_price":self .entry_price ,
-        "current_price":self .current_price ,
-        "stop_loss":self .stop_loss ,
-        "ticket":self .ticket ,
-        "timestamp":self .timestamp .isoformat (),
-        "pnl":self .pnl ,
-        "pnl_percent":self .pnl_percent ,
-        "total_value":self .total_value ,
+            "ticker": self.ticker,
+            "quantity": self.quantity,
+            "entry_price": self.entry_price,
+            "current_price": self.current_price,
+            "stop_loss": self.stop_loss,
+            "ticket": self.ticket,
+            "timestamp": self.timestamp.isoformat(),
+            "pnl": self.pnl,
+            "pnl_percent": self.pnl_percent,
+            "total_value": self.total_value,
         }
 
-class BrokerBase (ABC ):
+
+# ═══════════════════════════════════════════════════════════════════
+#  Classe base abstrata
+# ═══════════════════════════════════════════════════════════════════
+
+class BrokerBase(ABC):
     """
     Contrato abstrato que toda implementação de corretora deve seguir.
 
@@ -167,7 +184,7 @@ class BrokerBase (ABC ):
     """
 
     @abstractmethod
-    def connect (self )->bool :
+    def connect(self) -> bool:
         """
         Estabelece conexão com a corretora.
 
@@ -177,12 +194,12 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def disconnect (self )->None :
+    def disconnect(self) -> None:
         """Encerra a conexão com a corretora."""
         ...
 
     @abstractmethod
-    def get_balance (self )->float :
+    def get_balance(self) -> float:
         """
         Retorna o saldo em caixa disponível para operações.
 
@@ -192,7 +209,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def get_equity (self )->float :
+    def get_equity(self) -> float:
         """
         Retorna o patrimônio total (saldo + valor das posições abertas).
 
@@ -202,7 +219,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def buy (self ,ticker :str ,quantity :int ,price :float ,stop_loss :float )->Order :
+    def buy(self, ticker: str, quantity: int, price: float, stop_loss: float) -> Order:
         """
         Envia ordem de compra.
 
@@ -218,7 +235,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def sell (self ,ticker :str ,quantity :int ,price :float )->Order :
+    def sell(self, ticker: str, quantity: int, price: float) -> Order:
         """
         Envia ordem de venda.
 
@@ -233,7 +250,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def emergency_sell (self ,ticker :str )->Order :
+    def emergency_sell(self, ticker: str) -> Order:
         """
         Venda de emergência — liquida toda a posição de um ativo a preço de mercado.
 
@@ -246,7 +263,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def get_positions (self )->list [Position ]:
+    def get_positions(self) -> list[Position]:
         """
         Retorna todas as posições abertas.
 
@@ -256,7 +273,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def get_position (self ,ticker :str )->Optional [Position ]:
+    def get_position(self, ticker: str) -> Optional[Position]:
         """
         Retorna a posição de um ativo específico.
 
@@ -269,7 +286,7 @@ class BrokerBase (ABC ):
         ...
 
     @abstractmethod
-    def modify_stop_loss (self ,ticker :str ,new_sl :float )->bool :
+    def modify_stop_loss(self, ticker: str, new_sl: float) -> bool:
         """
         Modifica o stop-loss de uma posição aberta.
 
@@ -282,4 +299,6 @@ class BrokerBase (ABC ):
         """
         ...
 
-BaseBroker =BrokerBase
+
+# Alias de compatibilidade com código legado
+BaseBroker = BrokerBase
