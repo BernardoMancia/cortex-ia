@@ -33,25 +33,31 @@ class RiskManager:
         stop_loss_percent: float = settings.STOP_LOSS_PERCENT,
         max_positions: int = settings.MAX_POSITIONS,
         daily_loss_limit: float = settings.MAX_DAILY_LOSS_PERCENT,
+        min_shares: int = getattr(settings, 'min_quantity', 1),
+        max_shares: int = getattr(settings, 'max_quantity', 50000),
+        max_concentration: float = getattr(settings, 'MAX_CONCENTRATION', 0.25),
     ) -> None:
         """
         Inicializa o gerenciador de risco.
 
         Args:
             stop_loss_percent: Percentual de perda máxima tolerada (0.10 = 10%).
-            max_positions: Limite de posições simultâneas (padrão: 4).
+            max_positions: Limite de posições simultâneas (padrão: 10).
             daily_loss_limit: Limite de drawdown diário (0.03 = 3%).
+            min_shares: Quantidade mínima por ordem.
+            max_shares: Quantidade máxima por ordem.
+            max_concentration: Concentração máxima por ativo (0.25 = 25%).
         """
         self.stop_loss_percent = stop_loss_percent
         self.max_positions = max_positions
         self.daily_loss_limit = -abs(daily_loss_limit)
-        self.min_shares = getattr(settings, 'min_quantity', 1)
-        self.max_shares = getattr(settings, 'max_quantity', 1000)
-        self.max_concentration = 0.30  # Máx 30% por ativo
+        self.min_shares = min_shares
+        self.max_shares = max_shares
+        self.max_concentration = max_concentration
         self.trailing_stop_activation = getattr(settings, 'TRAILING_STOP_TRIGGER_PERCENT', 0.02)
         self.trailing_stop_distance = getattr(settings, 'TRAILING_STOP_DISTANCE_PERCENT', 0.015)
 
-        # Compatibilidade com atributos de classe
+        # Compatibilidade com atributos de classe/instância
         self.MIN_SHARES = self.min_shares
         self.MAX_SHARES = self.max_shares
         self.MAX_CONCENTRATION = self.max_concentration

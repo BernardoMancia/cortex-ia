@@ -98,7 +98,8 @@ class Settings:
         # ── Capital e risco ───────────────────────────────
         self.CAPITAL_INICIAL: Final[float] = _env_float("CAPITAL_INICIAL", 100000.00)
         self.STOP_LOSS_PERCENT: Final[float] = _env_float("STOP_LOSS_PERCENT", 0.10)
-        self.MAX_POSITIONS: Final[int] = _env_int("MAX_POSITIONS", 4)
+        self.MAX_POSITIONS: Final[int] = _env_int("MAX_POSITIONS", 10)
+        self.MAX_CONCENTRATION: Final[float] = _env_float("MAX_CONCENTRATION", 0.25)  # Máx 25% por ativo
         self.MAX_DAILY_LOSS_PERCENT: Final[float] = _env_float("MAX_DAILY_LOSS_PERCENT", 0.03)  # 3% circuit breaker
         self.TRAILING_STOP_TRIGGER_PERCENT: Final[float] = _env_float("TRAILING_STOP_TRIGGER_PERCENT", 0.02)  # +2% ativa BE
         self.TRAILING_STOP_DISTANCE_PERCENT: Final[float] = _env_float("TRAILING_STOP_DISTANCE_PERCENT", 0.015)  # 1.5% trail
@@ -155,7 +156,7 @@ class Settings:
 
         # ── Lotes e Quantidades ───────────────────────────
         self.min_quantity: int = _env_int("MIN_QUANTITY", 1)
-        self.max_quantity: int = _env_int("MAX_QUANTITY", 99)
+        self.max_quantity: int = _env_int("MAX_QUANTITY", 50000)
 
 
         # ── Cache ─────────────────────────────────────────

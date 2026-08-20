@@ -202,8 +202,8 @@ class TestValidateOrder:
         assert 'Capital insuficiente' in reason
 
     def test_validate_order_quantity_above_max(self) -> None:
-        """Quantidade acima de 99 deve ser rejeitada."""
-        rm = RiskManager()
+        """Quantidade acima do teto máximo deve ser rejeitada."""
+        rm = RiskManager(max_shares=99)
         is_valid, reason = rm.validate_order(
             ticker='PETR4',
             quantity=100,
@@ -257,9 +257,9 @@ class TestGetMaxShares:
         max_shares = rm.get_max_shares(price=30.00, available_capital=200.00)
         assert max_shares == 6  # 200 / 30 = 6.66 → 6
 
-    def test_get_max_shares_limited_by_99(self) -> None:
-        """Max shares deve ser limitado a 99."""
-        rm = RiskManager()
+    def test_get_max_shares_limited_by_max(self) -> None:
+        """Max shares deve ser limitado pelo teto configurado."""
+        rm = RiskManager(max_shares=99)
         max_shares = rm.get_max_shares(price=1.00, available_capital=500.00)
         assert max_shares == 99
 
