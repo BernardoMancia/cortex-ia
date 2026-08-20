@@ -39,20 +39,20 @@ class TrendSignal(Enum):
 class TechnicalResult:
     """Resultado completo da análise técnica de um ativo."""
 
-    signal: TrendSignal
-    ema_9: float
-    ema_21: float
-    ema_50: float
-    rsi: float
-    support: float
-    resistance: float
-    macd_hist: float
-    atr: float
-    rel_vol: float
-    bb_lower: float
-    bb_upper: float
-    confidence: float   # 0.0 a 1.0
-    reasoning: str      # Explicação em português
+    signal: TrendSignal = TrendSignal.NEUTRAL
+    ema_9: float = 0.0
+    ema_21: float = 0.0
+    ema_50: float = 0.0
+    rsi: float = 50.0
+    support: float = 0.0
+    resistance: float = 0.0
+    macd_hist: float = 0.0
+    atr: float = 0.0
+    rel_vol: float = 1.0
+    bb_lower: float = 0.0
+    bb_upper: float = 0.0
+    confidence: float = 0.0   # 0.0 a 1.0
+    reasoning: str = ''      # Explicação em português
 
 
 # ─── Motor de Análise Técnica ────────────────────────────────────────────────
