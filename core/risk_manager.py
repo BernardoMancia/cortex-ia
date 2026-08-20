@@ -31,8 +31,8 @@ class RiskManager:
     def __init__(
         self,
         stop_loss_percent: float = settings.STOP_LOSS_PERCENT,
-        max_positions: int = settings.MAX_POSITIONS,
-        daily_loss_limit: float = settings.MAX_DAILY_LOSS_PERCENT,
+        max_positions: int = getattr(settings, 'MAX_POSITIONS', 0),
+        daily_loss_limit: float = getattr(settings, 'MAX_DAILY_LOSS_PERCENT', 0.03),
         min_shares: int = getattr(settings, 'min_quantity', 1),
         max_shares: int = getattr(settings, 'max_quantity', 50000),
         max_concentration: float = getattr(settings, 'MAX_CONCENTRATION', 0.25),
@@ -42,7 +42,7 @@ class RiskManager:
 
         Args:
             stop_loss_percent: Percentual de perda máxima tolerada (0.10 = 10%).
-            max_positions: Limite de posições simultâneas (padrão: 10).
+            max_positions: Limite de posições simultâneas (0 = ilimitado).
             daily_loss_limit: Limite de drawdown diário (0.03 = 3%).
             min_shares: Quantidade mínima por ordem.
             max_shares: Quantidade máxima por ordem.
@@ -67,11 +67,12 @@ class RiskManager:
         self._daily_pnl: float = 0.0
         self._circuit_breaker_active: bool = False
         self._last_reset_date: Optional[str] = None
+        pos_desc = f"{self.max_positions}" if self.max_positions > 0 else "Ilimitadas"
         logger.info(
-            'RiskManager inicializado — stop-loss: %.1f%%, max posições: %d, '
+            'RiskManager inicializado — stop-loss: %.1f%%, max posições: %s, '
             'concentração max: %.0f%%, circuit breaker: %.1f%%',
             self.stop_loss_percent * 100,
-            self.max_positions,
+            pos_desc,
             self.max_concentration * 100,
             self.daily_loss_limit * 100,
         )
@@ -311,8 +312,8 @@ class RiskManager:
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason
 
-        # Validar limite de posições abertas simultâneas
-        if positions is not None:
+        # Validar limite de posições abertas simultâneas (se configurado > 0)
+        if self.max_positions > 0 and positions is not None:
             is_new = not any(p.ticker.rstrip('Ff') == ticker.rstrip('Ff') for p in positions)
             if is_new and len(positions) >= self.max_positions:
                 reason = f'Limite máximo de {self.max_positions} posições simultâneas atingido'

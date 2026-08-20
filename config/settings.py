@@ -98,7 +98,7 @@ class Settings:
         # ── Capital e risco ───────────────────────────────
         self.CAPITAL_INICIAL: Final[float] = _env_float("CAPITAL_INICIAL", 100000.00)
         self.STOP_LOSS_PERCENT: Final[float] = _env_float("STOP_LOSS_PERCENT", 0.10)
-        self.MAX_POSITIONS: Final[int] = _env_int("MAX_POSITIONS", 10)
+        self.MAX_POSITIONS: Final[int] = _env_int("MAX_POSITIONS", 0)  # 0 = posições ilimitadas
         self.MAX_CONCENTRATION: Final[float] = _env_float("MAX_CONCENTRATION", 0.25)  # Máx 25% por ativo
         self.MAX_DAILY_LOSS_PERCENT: Final[float] = _env_float("MAX_DAILY_LOSS_PERCENT", 0.03)  # 3% circuit breaker
         self.TRAILING_STOP_TRIGGER_PERCENT: Final[float] = _env_float("TRAILING_STOP_TRIGGER_PERCENT", 0.02)  # +2% ativa BE
