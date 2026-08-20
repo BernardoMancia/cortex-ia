@@ -3,8 +3,8 @@
 # Faz backup do banco de dados e do estado do simulador para proteção do patrimônio.
 
 # Configurações
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-BACKUP_DIR="${PROJECT_DIR}/backups"
+PROJECT_DIR="/home/servico/cortex-ia"
+BACKUP_DIR="/home/servico/cortex-ia/backups"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 RETENTION_DAYS=7
 

@@ -234,6 +234,16 @@ class SimulatorBroker(BrokerBase):
             self._connected = False
             logger.info("SimulatorBroker desconectado")
 
+    def reset_state(self, new_balance: float = 100000.00) -> None:
+        """Reseta o estado do simulador para o saldo inicial especificado."""
+        with self._lock:
+            self._initial_balance = new_balance
+            self._balance = new_balance
+            self._positions.clear()
+            self._next_ticket = 1
+            self._save_state()
+            logger.info("SimulatorBroker resetado com sucesso: Saldo R$ %.2f", new_balance)
+
     def get_balance(self) -> float:
         """
         Retorna o saldo em caixa disponível.

@@ -96,8 +96,13 @@ class Settings:
         self.BROKER_MODE: str = os.getenv("BROKER_MODE", "simulator").strip().lower()
 
         # ── Capital e risco ───────────────────────────────
-        self.CAPITAL_INICIAL: Final[float] = _env_float("CAPITAL_INICIAL", 200.00)
+        self.CAPITAL_INICIAL: Final[float] = _env_float("CAPITAL_INICIAL", 100000.00)
         self.STOP_LOSS_PERCENT: Final[float] = _env_float("STOP_LOSS_PERCENT", 0.10)
+        self.MAX_POSITIONS: Final[int] = _env_int("MAX_POSITIONS", 4)
+        self.MAX_DAILY_LOSS_PERCENT: Final[float] = _env_float("MAX_DAILY_LOSS_PERCENT", 0.03)  # 3% circuit breaker
+        self.TRAILING_STOP_TRIGGER_PERCENT: Final[float] = _env_float("TRAILING_STOP_TRIGGER_PERCENT", 0.02)  # +2% ativa BE
+        self.TRAILING_STOP_DISTANCE_PERCENT: Final[float] = _env_float("TRAILING_STOP_DISTANCE_PERCENT", 0.015)  # 1.5% trail
+        self.MAX_RISK_PER_TRADE_PERCENT: Final[float] = _env_float("MAX_RISK_PER_TRADE_PERCENT", 0.02)  # 2% do capital
 
         # ── Análise de sentimento ─────────────────────────
         self.SENTIMENT_MODE: str = os.getenv("SENTIMENT_MODE", "lightweight").strip().lower()
@@ -148,9 +153,9 @@ class Settings:
 
 
 
-        # ── Mercado fracionário ───────────────────────────
-        self.min_quantity: int = 1
-        self.max_quantity: int = 99
+        # ── Lotes e Quantidades ───────────────────────────
+        self.min_quantity: int = _env_int("MIN_QUANTITY", 1)
+        self.max_quantity: int = _env_int("MAX_QUANTITY", 99)
 
 
         # ── Cache ─────────────────────────────────────────

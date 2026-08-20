@@ -4,12 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-# Customize User, WorkingDirectory and ExecStart paths as needed for your environment
-User=cortex
-Group=cortex
-WorkingDirectory=/opt/cortex-ia
-Environment="PATH=/opt/cortex-ia/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/opt/cortex-ia/.venv/bin/python main.py
+User=servico
+Group=servico
+WorkingDirectory=/home/servico/cortex-ia
+Environment="PATH=/home/servico/cortex-ia/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/home/servico/cortex-ia/.venv/bin/python main.py
 Restart=always
 RestartSec=10
 TimeoutStopSec=20

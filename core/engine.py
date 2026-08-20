@@ -846,15 +846,55 @@ class CortexEngine:
                 msg += "O Córtex está hibernando até a próxima janela operacional."
             return msg
 
+        def cmd_desempenho():
+            try:
+                metrics = self.db.get_performance_summary()
+                msg = "📈 *Desempenho Geral do Córtex*\n\n"
+                msg += f"🎯 *Taxa de Acerto (Win Rate):* {metrics.get('win_rate', 0.0):.1f}%\n"
+                msg += f"📊 *Total de Trades:* {metrics.get('total_trades', 0)} (Compras: {metrics.get('total_buys', 0)}, Vendas: {metrics.get('total_sells', 0)})\n"
+                msg += f"📅 *Dias Monitorados:* {metrics.get('days_tracked', 0)}\n"
+                msg += f"🟢 *Dias Positivos:* {metrics.get('positive_days', 0)} | 🔴 *Dias Negativos:* {metrics.get('negative_days', 0)}\n"
+                msg += f"📉 *Drawdown Máximo:* {metrics.get('max_drawdown', 0.0):.2f}%\n"
+                return msg
+            except Exception as e:
+                logger.error("Erro em cmd_desempenho: %s", e)
+                return "❌ Erro ao calcular métricas de desempenho."
+
+        def cmd_fechartudo():
+            try:
+                positions = self.portfolio.positions
+                if not positions:
+                    return "💼 Nenhuma posição aberta para encerrar."
+                closed = []
+                for p in list(positions):
+                    t = self.broker.emergency_sell(p.ticker)
+                    if t and t.status == OrderStatus.FILLED:
+                        self.portfolio.remove_position(p.ticker, t.price)
+                        self.db.insert_trade(
+                            ticker=t.ticker,
+                            action=t.order_type.value,
+                            quantity=t.quantity,
+                            price=t.price,
+                            total_value=t.total_value,
+                            is_simulated=self.settings.simulation_mode,
+                        )
+                        closed.append(f"{p.ticker} ({t.quantity}x @ R$ {t.price:.2f})")
+                return f"🚨 *Encerramento Emergencial Concluído:*\n" + "\n".join(f"• {c}" for c in closed)
+            except Exception as e:
+                logger.error("Erro em cmd_fechartudo: %s", e)
+                return f"❌ Erro ao encerrar posições: {e}"
+
         def cmd_help():
             return (
                 "🤖 *Comandos do Córtex IA*\n\n"
                 "🔹 `/status` - Resumo rápido: patrimônio, caixa e posições.\n"
                 "🔹 `/carteira` - Detalhamento das ações compradas e rendimento atual.\n"
                 "🔹 `/trades` - Exibe o histórico das últimas 5 compras/vendas.\n"
-                "🔹 `/pensamentos` - Exibe o raciocínio das últimas 5 análises tomadas pela IA.\n"
+                "🔹 `/desempenho` - Estatísticas de performance e taxa de acerto.\n"
+                "🔹 `/pensamentos` - Exibe o raciocínio das últimas 5 decisões da IA.\n"
                 "🔹 `/mercado` - Mostra se a B3 está aberta ou fechada para o bot.\n"
-                "🔹 `/pause` - Trava o bot em modo Simulação (não emite ordens reais).\n"
+                "🔹 `/fechartudo` - Venda emergencial de todas as posições da carteira.\n"
+                "🔹 `/pause` - Trava o bot em modo Simulação.\n"
                 "🔹 `/resume` - Destrava o bot de volta para Produção.\n"
                 "🔹 `/help` - Exibe esta mensagem de ajuda."
             )
@@ -865,5 +905,7 @@ class CortexEngine:
         self.telegram.register_command('/pensamentos', cmd_pensamentos)
         self.telegram.register_command('/carteira', cmd_carteira)
         self.telegram.register_command('/trades', cmd_trades)
+        self.telegram.register_command('/desempenho', cmd_desempenho)
+        self.telegram.register_command('/fechartudo', cmd_fechartudo)
         self.telegram.register_command('/mercado', cmd_mercado)
         self.telegram.register_command('/help', cmd_help)

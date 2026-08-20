@@ -26,34 +26,48 @@ logger = logging.getLogger('cortex.risk_manager')
 
 
 class RiskManager:
-    """Gerenciador de risco para operações no mercado fracionário da B3."""
+    """Gerenciador de risco para operações de trading da B3."""
 
-    # Limites do mercado fracionário
-    MIN_SHARES: int = 1
-    MAX_SHARES: int = 99
-
-    # Limites de risco
-    MAX_CONCENTRATION: float = 0.30  # Máximo 30% do capital por ativo
-    DAILY_LOSS_LIMIT: float = -0.05  # -5% de perda diária encerra operações
-    TRAILING_STOP_ACTIVATION: float = 0.05  # Ativar trailing stop após +5%
-
-    def __init__(self, stop_loss_percent: float = settings.STOP_LOSS_PERCENT) -> None:
+    def __init__(
+        self,
+        stop_loss_percent: float = settings.STOP_LOSS_PERCENT,
+        max_positions: int = settings.MAX_POSITIONS,
+        daily_loss_limit: float = settings.MAX_DAILY_LOSS_PERCENT,
+    ) -> None:
         """
         Inicializa o gerenciador de risco.
 
         Args:
             stop_loss_percent: Percentual de perda máxima tolerada (0.10 = 10%).
+            max_positions: Limite de posições simultâneas (padrão: 4).
+            daily_loss_limit: Limite de drawdown diário (0.03 = 3%).
         """
         self.stop_loss_percent = stop_loss_percent
+        self.max_positions = max_positions
+        self.daily_loss_limit = -abs(daily_loss_limit)
+        self.min_shares = getattr(settings, 'min_quantity', 1)
+        self.max_shares = getattr(settings, 'max_quantity', 1000)
+        self.max_concentration = 0.30  # Máx 30% por ativo
+        self.trailing_stop_activation = getattr(settings, 'TRAILING_STOP_TRIGGER_PERCENT', 0.02)
+        self.trailing_stop_distance = getattr(settings, 'TRAILING_STOP_DISTANCE_PERCENT', 0.015)
+
+        # Compatibilidade com atributos de classe
+        self.MIN_SHARES = self.min_shares
+        self.MAX_SHARES = self.max_shares
+        self.MAX_CONCENTRATION = self.max_concentration
+        self.DAILY_LOSS_LIMIT = self.daily_loss_limit
+        self.TRAILING_STOP_ACTIVATION = self.trailing_stop_activation
+
         self._daily_pnl: float = 0.0
         self._circuit_breaker_active: bool = False
         self._last_reset_date: Optional[str] = None
         logger.info(
-            'RiskManager inicializado — stop-loss: %.1f%%, concentração max: %.0f%%, '
-            'circuit breaker: %.1f%%',
+            'RiskManager inicializado — stop-loss: %.1f%%, max posições: %d, '
+            'concentração max: %.0f%%, circuit breaker: %.1f%%',
             self.stop_loss_percent * 100,
-            self.MAX_CONCENTRATION * 100,
-            self.DAILY_LOSS_LIMIT * 100,
+            self.max_positions,
+            self.max_concentration * 100,
+            self.daily_loss_limit * 100,
         )
 
     def check_take_profit_triggers(self, positions: list[Position]) -> list[Position]:
@@ -291,11 +305,19 @@ class RiskManager:
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason
 
-        # Validar quantidade no mercado fracionário
+        # Validar limite de posições abertas simultâneas
+        if positions is not None:
+            is_new = not any(p.ticker.rstrip('Ff') == ticker.rstrip('Ff') for p in positions)
+            if is_new and len(positions) >= self.max_positions:
+                reason = f'Limite máximo de {self.max_positions} posições simultâneas atingido'
+                logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
+                return False, reason
+
+        # Validar quantidade no mercado fracionário/padrão
         if quantity < self.MIN_SHARES:
             reason = (
                 f'Quantidade inválida: {quantity} < {self.MIN_SHARES} '
-                f'(mínimo para mercado fracionário)'
+                f'(mínimo permitido)'
             )
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason

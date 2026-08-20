@@ -205,6 +205,8 @@ class DatabaseManager:
         )
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         try:
             yield conn
@@ -952,6 +954,21 @@ class DatabaseManager:
                 result["sells"] = row["cnt"]
 
         return result
+
+    def reset_all_data(self) -> None:
+        """
+        Limpa todos os dados de todas as tabelas para reset completo do sistema.
+        """
+        with self._lock:
+            with self._get_connection() as conn:
+                tables = [
+                    "trades", "sentiment_scores", "market_snapshots",
+                    "daily_reports", "ai_decisions", "telegram_logs",
+                    "system_health", "news_items"
+                ]
+                for t in tables:
+                    conn.execute(f"DELETE FROM {t};")
+            logger.info("Todas as tabelas do banco de dados foram resetadas com sucesso.")
 
     def close(self) -> None:
         """
