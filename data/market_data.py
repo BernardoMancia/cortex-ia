@@ -260,7 +260,7 @@ class MarketData:
                 p = self.get_current_price(t)
                 return t, p
             except Exception as exc:
-                logger.warning("Falha ao obter preço para %s no lote: %s", t, exc)
+                logger.debug("Falha ao obter preço para %s no lote: %s", t, exc)
                 return t, None
 
         max_workers = min(len(missing_tickers), 25)

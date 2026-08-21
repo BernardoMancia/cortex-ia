@@ -168,24 +168,23 @@ class Settings:
         # ── Propriedades de acesso unificado ─────────────
         # (aliases em snake_case para compatibilidade com todo o codebase)
 
-        # ── Carteiras do Mercado B3 (Índices e Setores) ────
+        # ── Carteiras do Mercado B3 (Índices e Setores - 101 Ativos Validados) ────
         self.B3_PORTFOLIOS: Final[dict[str, list[str]]] = {
             "IBOV": [
                 "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "RENT3", "ABEV3",
-                "MGLU3", "SUZB3", "EMBR3", "PRIO3", "B3SA3", "RDOR3", "VIVT3", "CSAN3",
-                "GGBR4", "CSNA3", "TOTS3", "BPAC11", "ELET3", "ELET6", "CPLE6", "CMIG4",
-                "SBSP3", "HAPV3", "EQTL3", "RADL3", "LREN3", "BRFS3", "JBSS3", "BEEF3",
-                "MRFG3", "KLBN11", "SANB11", "BBSE3", "CXSE3", "TIMS3", "CPFE3", "EGIE3",
-                "TAEE11", "ALOS3", "MULT3", "IGTI11", "CYRE3", "EZTC3", "MRVE3", "LWSA3",
-                "CASH3", "COGN3", "YDUQ3", "AZUL4", "GOLL4", "CMIN3", "ENEV3", "SMTO3",
-                "SLCE3", "RAIZ4", "DXCO3", "BRKM5", "CCRO3", "RUMO3", "RAIL3", "STBP3",
-                "HYPE3", "FLRY3", "ASAI3", "CRFB3", "NTCO3", "AZZA3", "VIVA3", "PETR3",
-                "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4", "RECV3", "BRAV3"
+                "MGLU3", "SUZB3", "PRIO3", "B3SA3", "RDOR3", "VIVT3", "CSAN3", "GGBR4",
+                "CSNA3", "TOTS3", "BPAC11", "CMIG4", "SBSP3", "HAPV3", "EQTL3", "RADL3",
+                "LREN3", "BEEF3", "KLBN11", "SANB11", "BBSE3", "CXSE3", "TIMS3", "CPFE3",
+                "EGIE3", "TAEE11", "ALOS3", "MULT3", "IGTI11", "CYRE3", "EZTC3", "MRVE3",
+                "LWSA3", "CASH3", "COGN3", "YDUQ3", "CMIN3", "ENEV3", "SMTO3", "SLCE3",
+                "RAIZ4", "DXCO3", "BRKM5", "RAIL3", "HYPE3", "FLRY3", "ASAI3", "AZZA3",
+                "VIVA3", "PETR3", "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4",
+                "RECV3", "BRAV3"
             ],
             "IDIV": [
-                "BBAS3", "TAEE11", "CPLE6", "CMIG4", "EGIE3", "TRPL4", "VIVT3", "BBSE3",
-                "CXSE3", "SANB11", "ITSA4", "PSSA3", "CSMG3", "SAPR11", "ALUP11", "UNIP6",
-                "FESA4", "KEPL3", "LEVE3", "VALE3", "PETR4", "BBDC4", "ITUB4"
+                "BBAS3", "TAEE11", "CMIG4", "EGIE3", "VIVT3", "BBSE3", "CXSE3", "SANB11",
+                "ITSA4", "PSSA3", "CSMG3", "SAPR11", "ALUP11", "UNIP6", "FESA4", "KEPL3",
+                "LEVE3", "VALE3", "PETR4", "BBDC4", "ITUB4"
             ],
             "SMLL": [
                 "POMO4", "KEPL3", "LEVE3", "TUPY3", "UNIP6", "POSI3", "RANI3", "MYPK3",
@@ -195,7 +194,7 @@ class Settings:
             ]
         }
 
-        # Carteira consolidada com todos os ativos líquidos únicos da B3 (~110 ativos)
+        # Carteira consolidada com todos os ativos líquidos únicos da B3 (101 ativos)
         all_unique = []
         for p_list in self.B3_PORTFOLIOS.values():
             for t in p_list:
