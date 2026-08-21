@@ -93,15 +93,19 @@ def get_status(request: Request) -> dict[str, Any]:
 
 @router.get("/api/production_balance")
 async def get_production_balance() -> dict[str, Any]:
-    """Fetches real account balance from MT5 Bridge."""
+    """Fetches real account balance from MT5 Bridge if in production."""
+    sim_mode = os.getenv("SIMULATION_MODE", "true").lower() in ("true", "1", "yes", "sim")
+    if sim_mode:
+        return {"status": "simulator", "balance": 0.0}
+
     try:
-        resp = await asyncio.to_thread(sync_requests.get, "http://127.0.0.1:5000/account", timeout=3)
+        resp = await asyncio.to_thread(sync_requests.get, "http://127.0.0.1:5000/account", timeout=1)
         if resp.status_code == 200:
             data = resp.json()
             return {"status": "ok", "balance": data.get("balance", 0.0)}
     except Exception as e:
-        logger.warning('Falha ao buscar saldo de produção: %s', e)
-    return {"status": "error", "balance": 0.0}
+        logger.debug('Falha ao buscar saldo de produção MT5: %s', e)
+    return {"status": "offline", "balance": 0.0}
 
 def _resolve_log_source() -> tuple[str | None, str]:
     """Retorna (caminho_arquivo, tipo) para streaming de logs."""

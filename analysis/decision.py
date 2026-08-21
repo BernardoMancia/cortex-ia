@@ -8,6 +8,7 @@ com raciocínio explicativo ('Pensamento do Córtex') em português.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import pandas as pd
 from models.data_models import Action, Decision
 from typing import Any, Optional, Protocol, runtime_checkable
 
@@ -136,36 +137,46 @@ class DecisionEngine:
         logger.debug('Avaliando %s com %d notícias', ticker, len(news_items))
         now = datetime.now(BRT)
 
-        # ── 1. Obter preço atual ─────────────────────────────────────────
-        price_data = self.market_data.get_current_price(ticker)
-        current_price = price_data.get('last') if price_data else None
-        if current_price is None or current_price <= 0:
-            logger.warning('Preço indisponível para %s — retornando HOLD', ticker)
-            return Decision(
-                ticker=ticker,
-                action=Action.HOLD,
-                confidence=0.0,
-                reasoning=f"Dados indisponíveis para {ticker}. Aguardando dados.",
-                technical_score=0.0,
-                sentiment_score=0.0,
-                quantity=0,
-                price=0.0,
-                stop_loss=0.0,
-                timestamp=now,
-            )
+        # ── 1. Obter preço atual com fallback resiliente ──────────────────
+        current_price = None
+        price_data = None
+        try:
+            price_data = self.market_data.get_current_price(ticker)
+            current_price = price_data.get('last') if price_data else None
+        except Exception as exc:
+            logger.debug('Preço direto indisponível para %s: %s', ticker, exc)
 
         # ── 2. Obter histórico OHLCV ────────────────────────────────────
         df = self.market_data.get_ohlcv(
             ticker=ticker, period=self.DEFAULT_OHLCV_PERIOD, interval=self.DEFAULT_OHLCV_INTERVAL
         )
 
-        if df is None or (hasattr(df, 'empty') and df.empty):
-            logger.warning('Dados OHLCV indisponíveis para %s — retornando HOLD', ticker)
+        has_data = False
+        if isinstance(df, pd.DataFrame):
+            has_data = not df.empty
+            if (current_price is None or current_price <= 0) and has_data:
+                try:
+                    current_price = float(df.iloc[-1]['Close'])
+                    price_data = {'last': current_price, 'bid': current_price, 'ask': current_price, 'ticker': ticker}
+                except Exception:
+                    pass
+        elif isinstance(df, (list, tuple)):
+            has_data = len(df) > 0
+            if (current_price is None or current_price <= 0) and has_data:
+                try:
+                    last_item = df[-1]
+                    current_price = float(getattr(last_item, 'close', getattr(last_item, 'Close', 0.0)))
+                    price_data = {'last': current_price, 'bid': current_price, 'ask': current_price, 'ticker': ticker}
+                except Exception:
+                    pass
+
+        if current_price is None or current_price <= 0 or not has_data:
+            logger.debug('Dados de mercado indisponíveis para %s — mantendo HOLD', ticker)
             return Decision(
                 ticker=ticker,
                 action=Action.HOLD,
                 confidence=0.0,
-                reasoning=f"Dados indisponíveis para {ticker}. Aguardando dados.",
+                reasoning=f"Dados de mercado temporariamente indisponíveis para {ticker}.",
                 technical_score=0.0,
                 sentiment_score=0.0,
                 quantity=0,

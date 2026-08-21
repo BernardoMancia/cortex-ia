@@ -394,21 +394,37 @@ class MarketData:
                     logger.debug("Preço %s via daily history: R$%.2f", ticker, last_price)
                     return result
 
-                logger.warning(
-                    "yfinance retornou dados vazios para %s (tentativa %d/%d)",
-                    yf_symbol, attempt, self.MAX_RETRIES,
+                logger.debug(
+                    "yfinance retornou dados vazios para %s",
+                    yf_symbol,
                 )
+                # Tentar 1mo como última alternativa rápida
+                hist_month = yf_ticker.history(period="1mo")
+                if hist_month is not None and not hist_month.empty:
+                    last_row = hist_month.iloc[-1]
+                    last_price = float(last_row["Close"])
+                    volume = int(last_row.get("Volume", 0))
+                    return {
+                        "bid": last_price,
+                        "ask": last_price,
+                        "last": last_price,
+                        "volume": volume,
+                        "timestamp": datetime.now(tz=BRT).isoformat(),
+                        "source": "yfinance_monthly",
+                        "ticker": ticker,
+                    }
+                return None
 
             except Exception as exc:
                 wait_time = self.BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
-                logger.warning(
+                logger.debug(
                     "Erro yfinance para %s (tentativa %d/%d): %s — aguardando %.1fs",
                     yf_symbol, attempt, self.MAX_RETRIES, exc, wait_time,
                 )
                 if attempt < self.MAX_RETRIES:
                     time.sleep(wait_time)
 
-        logger.error(
+        logger.debug(
             "Falha ao obter preço de %s via yfinance após %d tentativas",
             ticker, self.MAX_RETRIES,
         )

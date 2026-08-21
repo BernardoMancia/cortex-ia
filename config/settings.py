@@ -179,8 +179,8 @@ class Settings:
                 "TAEE11", "ALOS3", "MULT3", "IGTI11", "CYRE3", "EZTC3", "MRVE3", "LWSA3",
                 "CASH3", "COGN3", "YDUQ3", "AZUL4", "GOLL4", "CMIN3", "ENEV3", "SMTO3",
                 "SLCE3", "RAIZ4", "DXCO3", "BRKM5", "CCRO3", "RUMO3", "RAIL3", "STBP3",
-                "HYPE3", "FLRY3", "ASAI3", "CRFB3", "NTCO3", "ARZZ3", "VIVA3", "PETR3",
-                "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4", "RECV3", "ENAT3"
+                "HYPE3", "FLRY3", "ASAI3", "CRFB3", "NTCO3", "AZZA3", "VIVA3", "PETR3",
+                "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4", "RECV3", "BRAV3"
             ],
             "IDIV": [
                 "BBAS3", "TAEE11", "CPLE6", "CMIG4", "EGIE3", "TRPL4", "VIVT3", "BBSE3",
@@ -190,13 +190,12 @@ class Settings:
             "SMLL": [
                 "POMO4", "KEPL3", "LEVE3", "TUPY3", "UNIP6", "POSI3", "RANI3", "MYPK3",
                 "WIZC3", "ROMI3", "SHUL4", "TGMA3", "LOGN3", "TEND3", "DIRR3", "CURY3",
-                "PLPL3", "LAVV3", "TRIS3", "JHSF3", "LOGG3", "EVEN3", "RPAO4", "ODPV3",
-                "MATD3", "PARD3", "BLAU3", "VVEO3", "ANIM3", "SEER3", "INTB3", "BMOB3",
-                "MDIA3", "CAML3", "AURA33"
+                "PLPL3", "LAVV3", "TRIS3", "JHSF3", "LOGG3", "EVEN3", "BLAU3",
+                "ANIM3", "SEER3", "INTB3", "BMOB3", "MDIA3", "CAML3", "AURA33"
             ]
         }
 
-        # Carteira consolidada com todos os ativos líquidos únicos da B3 (~115 ativos)
+        # Carteira consolidada com todos os ativos líquidos únicos da B3 (~110 ativos)
         all_unique = []
         for p_list in self.B3_PORTFOLIOS.values():
             for t in p_list:
@@ -225,8 +224,7 @@ class Settings:
             # Petróleo, Gás e Combustíveis
             "PETR4": "Petróleo e Gás", "PETR3": "Petróleo e Gás", "PRIO3": "Petróleo e Gás",
             "RECV3": "Petróleo e Gás", "UGPA3": "Petróleo e Gás", "CSAN3": "Petróleo e Gás",
-            "RAIZ4": "Petróleo e Gás", "ENAT3": "Petróleo e Gás", "VBBR3": "Petróleo e Gás",
-            "RPAO4": "Petróleo e Gás",
+            "RAIZ4": "Petróleo e Gás", "BRAV3": "Petróleo e Gás", "VBBR3": "Petróleo e Gás",
 
             # Mineração e Siderurgia
             "VALE3": "Siderurgia e Mineração", "GGBR4": "Siderurgia e Mineração",

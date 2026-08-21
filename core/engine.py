@@ -395,6 +395,13 @@ class CortexEngine:
                     published_at=item.published_at.isoformat() if item.published_at else None,
                 )
 
+        # 3.2 Pré-carregar cotações e OHLCV em lote paralelo para todo o watchlist
+        try:
+            self.market_data.get_prices_batch(self.settings.watchlist)
+            self.market_data.get_ohlcv_batch(self.settings.watchlist, period="3mo", interval="1d")
+        except Exception as exc:
+            logger.debug('Falha no pré-carregamento em lote: %s', exc)
+
         # 4. Avaliar cada ativo do watchlist
         for ticker in self.settings.watchlist:
             try:
