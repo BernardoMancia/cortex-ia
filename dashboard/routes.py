@@ -2,10 +2,10 @@ import os
 import json
 import logging
 import sqlite3
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Any
 import asyncio
+from typing import Any
 import requests as sync_requests
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 
 logger = logging.getLogger('cortex.dashboard.routes')
 
@@ -14,6 +14,8 @@ router = APIRouter()
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "cortex.db")
 LOG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs", "cortex.log")
 SIMULATOR_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "simulator_state.json")
+VPS_LOG_PATH = "/LOGS-PROJETOS/cortex-ia/systemd-out.log"
+VPS_DB_LOG_PATH = "/LOGS-PROJETOS/cortex-ia/logs.db"
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -21,17 +23,35 @@ def get_db_connection():
     return conn
 
 @router.get("/api/status")
-def get_status() -> dict[str, Any]:
-    """Returns the current portfolio status and recent decisions."""
+def get_status(request: Request) -> dict[str, Any]:
+    """Returns the current portfolio status, watchlist and recent decisions."""
     status = {
         "balance": 0.0,
         "equity": 0.0,
         "positions": [],
-        "recent_decisions": []
+        "recent_decisions": [],
+        "market_status": "DESCONHECIDO",
+        "watchlist": [],
     }
-    
-    # Try reading from simulator_state.json
-    if os.path.exists(SIMULATOR_STATE_PATH):
+
+    # 1. Tentar ler do estado vivo em memória (DashboardState)
+    dashboard_state = getattr(request.app.state, "dashboard_state", None)
+    if dashboard_state is not None:
+        try:
+            live = dashboard_state.get_state()
+            port = live.get("portfolio", {})
+            if port:
+                status["balance"] = port.get("free_cash", 0.0)
+                status["equity"] = port.get("total_value", 0.0)
+                status["positions"] = port.get("positions", [])
+            status["market_status"] = live.get("market_status", "DESCONHECIDO")
+            status["watchlist"] = live.get("watchlist", [])
+            status["recent_decisions"] = live.get("recent_decisions", [])
+        except Exception as exc:
+            logger.warning("Falha ao ler dashboard_state em memória: %s", exc)
+
+    # 2. Fallback para simulator_state.json se balance/equity ainda estiverem zerados
+    if status["equity"] == 0.0 and os.path.exists(SIMULATOR_STATE_PATH):
         try:
             with open(SIMULATOR_STATE_PATH, "r", encoding="utf-8") as f:
                 state = json.load(f)
@@ -39,16 +59,17 @@ def get_status() -> dict[str, Any]:
                 positions = state.get("positions", {})
                 
                 equity = status["balance"]
-                for p in positions.values():
-                    p_val = p.get("current_price", p.get("entry_price", 0.0)) * p.get("quantity", 0)
-                    equity += p_val
-                    status["positions"].append(p)
+                if not status["positions"]:
+                    for p in positions.values():
+                        p_val = p.get("current_price", p.get("entry_price", 0.0)) * p.get("quantity", 0)
+                        equity += p_val
+                        status["positions"].append(p)
                 status["equity"] = equity
         except Exception as exc:
             logger.warning('Falha ao ler simulator_state.json: %s', exc)
 
-    # Read recent decisions from DB
-    if os.path.exists(DB_PATH):
+    # 3. Fallback de decisões do DB se vazio
+    if not status["recent_decisions"] and os.path.exists(DB_PATH):
         conn = None
         try:
             conn = get_db_connection()
@@ -82,27 +103,60 @@ async def get_production_balance() -> dict[str, Any]:
         logger.warning('Falha ao buscar saldo de produção: %s', e)
     return {"status": "error", "balance": 0.0}
 
+def _resolve_log_source() -> tuple[str | None, str]:
+    """Retorna (caminho_arquivo, tipo) para streaming de logs."""
+    if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 0:
+        return LOG_PATH, "file"
+    if os.path.exists(VPS_LOG_PATH) and os.path.getsize(VPS_LOG_PATH) > 0:
+        return VPS_LOG_PATH, "file"
+    if os.path.exists(VPS_DB_LOG_PATH):
+        return VPS_DB_LOG_PATH, "sqlite"
+    return None, "none"
+
 @router.websocket("/ws/logs")
 async def websocket_logs(websocket: WebSocket):
     await websocket.accept()
     
-    # Initial read
+    log_src, src_type = _resolve_log_source()
     last_position = 0
-    if os.path.exists(LOG_PATH):
-        last_position = max(0, os.path.getsize(LOG_PATH) - 10000) # Read last 10KB
+    last_db_id = 0
+
+    if src_type == "file" and log_src:
+        try:
+            last_position = max(0, os.path.getsize(log_src) - 10000)
+        except OSError:
+            last_position = 0
         
     try:
         while True:
-            if os.path.exists(LOG_PATH):
-                with open(LOG_PATH, "r", encoding="utf-8") as f:
+            log_src, src_type = _resolve_log_source()
+            if src_type == "file" and log_src and os.path.exists(log_src):
+                with open(log_src, "r", encoding="utf-8", errors="replace") as f:
                     f.seek(last_position)
                     new_lines = f.readlines()
                     last_position = f.tell()
                     
-                    if new_lines:
-                        for line in new_lines:
-                            if line.strip():
-                                await websocket.send_text(line.strip())
+                    for line in new_lines:
+                        if line.strip():
+                            await websocket.send_text(line.strip())
+            elif src_type == "sqlite" and log_src and os.path.exists(log_src):
+                try:
+                    conn = sqlite3.connect(log_src)
+                    cursor = conn.cursor()
+                    if last_db_id == 0:
+                        cursor.execute("SELECT id, timestamp, level, source, message FROM logs ORDER BY id DESC LIMIT 20")
+                        rows = cursor.fetchall()[::-1]
+                    else:
+                        cursor.execute("SELECT id, timestamp, level, source, message FROM logs WHERE id > ? ORDER BY id ASC LIMIT 50", (last_db_id,))
+                        rows = cursor.fetchall()
+                    
+                    for r in rows:
+                        last_db_id = max(last_db_id, r[0])
+                        formatted = f"[{r[1][:19]}] [{r[2]}] [{r[3]}] {r[4]}"
+                        await websocket.send_text(formatted)
+                    conn.close()
+                except Exception as exc:
+                    logger.debug("Erro ao consultar logs SQLite: %s", exc)
             
             await asyncio.sleep(1)
     except WebSocketDisconnect:

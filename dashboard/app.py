@@ -14,6 +14,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.responses import FileResponse
+
 # Mount static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -23,7 +25,10 @@ app.include_router(router)
 
 @app.get("/")
 async def root():
-    return {"message": "Córtex IA API is running. Access /static/index.html for the dashboard."}
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "Córtex IA Dashboard API is running."}
 
 
 # ────────────────────────────────────────────────────────────

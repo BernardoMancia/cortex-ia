@@ -263,7 +263,7 @@ class MarketData:
                 logger.warning("Falha ao obter preço para %s no lote: %s", t, exc)
                 return t, None
 
-        max_workers = min(len(missing_tickers), 10)
+        max_workers = min(len(missing_tickers), 25)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_ticker = {executor.submit(_fetch_single, t): t for t in missing_tickers}
             for future in as_completed(future_to_ticker):
@@ -302,7 +302,7 @@ class MarketData:
                 logger.warning("Falha ao obter OHLCV para %s no lote: %s", t, exc)
                 return t, pd.DataFrame()
 
-        max_workers = min(len(tickers), 10)
+        max_workers = min(len(tickers), 25)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_ticker = {executor.submit(_fetch_df, t): t for t in tickers}
             for future in as_completed(future_to_ticker):

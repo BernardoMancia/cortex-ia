@@ -145,8 +145,8 @@ class CortexEngine:
         # ── Servidor Dashboard ───────────────────────────────────────────
         self.dashboard_server = DashboardServer(
             self.dashboard_state,
-            host=getattr(self.settings, 'dashboard_host', '0.0.0.0'),
-            port=getattr(self.settings, 'dashboard_port', 8003),
+            host=getattr(self.settings, 'DASHBOARD_HOST', getattr(self.settings, 'dashboard_host', '0.0.0.0')),
+            port=getattr(self.settings, 'DASHBOARD_PORT', getattr(self.settings, 'dashboard_port', 8003)),
         )
 
         # ── Flags de Controle ────────────────────────────────────────────
@@ -201,11 +201,17 @@ class CortexEngine:
         self.health_monitor.start_daemon()
 
         market_open = self.scheduler.is_market_open()
-        self.dashboard_state.update('market_status', 'ABERTO' if market_open else 'FECHADO')
-        # O dashboard standalone (uvicorn) já roda na porta 8003
-        # Não iniciar o dashboard embutido para evitar conflito de porta
-        # self.dashboard_server.start()
-        logger.info('Dashboard standalone em http://0.0.0.0:8003')
+        # Iniciar Dashboard Web em background
+        try:
+            self.dashboard_server.start()
+            logger.info(
+                'Dashboard web iniciado em http://%s:%d',
+                self.dashboard_server.host,
+                self.dashboard_server.port,
+            )
+        except Exception as e:
+            logger.warning('Não foi possível iniciar dashboard server: %s', e)
+
         logger.info('Daemon de monitoramento iniciado')
 
         # Iniciar polling interativo do Telegram
@@ -712,7 +718,12 @@ class CortexEngine:
 
         self.health_monitor.stop_daemon()
         self.telegram.stop_polling()
-        # self.dashboard_server.stop()
+        try:
+            self.dashboard_server.stop()
+            logger.info('Dashboard web encerrado')
+        except Exception as e:
+            logger.warning('Erro ao parar dashboard server: %s', e)
+
         try:
             self.broker.disconnect()
             logger.info('Broker desconectado')

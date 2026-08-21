@@ -168,41 +168,130 @@ class Settings:
         # ── Propriedades de acesso unificado ─────────────
         # (aliases em snake_case para compatibilidade com todo o codebase)
 
-        # ── Watchlist ─────────────────────────────────────
-        self.WATCHLIST: Final[list[str]] = [
-            "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3",
-            "WEGE3", "RENT3", "ABEV3", "MGLU3", "SUZB3",
-            "EMBR3", "PRIO3", "B3SA3", "RDOR3", "VIVT3",
-            "CSAN3", "GGBR4", "CSNA3", "TOTS3", "BPAC11",
-        ]
+        # ── Carteiras do Mercado B3 (Índices e Setores) ────
+        self.B3_PORTFOLIOS: Final[dict[str, list[str]]] = {
+            "IBOV": [
+                "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "RENT3", "ABEV3",
+                "MGLU3", "SUZB3", "EMBR3", "PRIO3", "B3SA3", "RDOR3", "VIVT3", "CSAN3",
+                "GGBR4", "CSNA3", "TOTS3", "BPAC11", "ELET3", "ELET6", "CPLE6", "CMIG4",
+                "SBSP3", "HAPV3", "EQTL3", "RADL3", "LREN3", "BRFS3", "JBSS3", "BEEF3",
+                "MRFG3", "KLBN11", "SANB11", "BBSE3", "CXSE3", "TIMS3", "CPFE3", "EGIE3",
+                "TAEE11", "ALOS3", "MULT3", "IGTI11", "CYRE3", "EZTC3", "MRVE3", "LWSA3",
+                "CASH3", "COGN3", "YDUQ3", "AZUL4", "GOLL4", "CMIN3", "ENEV3", "SMTO3",
+                "SLCE3", "RAIZ4", "DXCO3", "BRKM5", "CCRO3", "RUMO3", "RAIL3", "STBP3",
+                "HYPE3", "FLRY3", "ASAI3", "CRFB3", "NTCO3", "ARZZ3", "VIVA3", "PETR3",
+                "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4", "RECV3", "ENAT3"
+            ],
+            "IDIV": [
+                "BBAS3", "TAEE11", "CPLE6", "CMIG4", "EGIE3", "TRPL4", "VIVT3", "BBSE3",
+                "CXSE3", "SANB11", "ITSA4", "PSSA3", "CSMG3", "SAPR11", "ALUP11", "UNIP6",
+                "FESA4", "KEPL3", "LEVE3", "VALE3", "PETR4", "BBDC4", "ITUB4"
+            ],
+            "SMLL": [
+                "POMO4", "KEPL3", "LEVE3", "TUPY3", "UNIP6", "POSI3", "RANI3", "MYPK3",
+                "WIZC3", "ROMI3", "SHUL4", "TGMA3", "LOGN3", "TEND3", "DIRR3", "CURY3",
+                "PLPL3", "LAVV3", "TRIS3", "JHSF3", "LOGG3", "EVEN3", "RPAO4", "ODPV3",
+                "MATD3", "PARD3", "BLAU3", "VVEO3", "ANIM3", "SEER3", "INTB3", "BMOB3",
+                "MDIA3", "CAML3", "AURA33"
+            ]
+        }
+
+        # Carteira consolidada com todos os ativos líquidos únicos da B3 (~115 ativos)
+        all_unique = []
+        for p_list in self.B3_PORTFOLIOS.values():
+            for t in p_list:
+                if t not in all_unique:
+                    all_unique.append(t)
+        self.B3_PORTFOLIOS["ALL"] = all_unique
+
+        # ── Resolução da Watchlist ─────────────────────────
+        custom_watchlist = os.getenv("WATCHLIST", "").strip()
+        portfolio_mode = os.getenv("WATCHLIST_PORTFOLIO", "ALL").strip().upper()
+
+        if custom_watchlist:
+            self.WATCHLIST: list[str] = [t.strip().upper() for t in custom_watchlist.split(",") if t.strip()]
+        elif portfolio_mode in self.B3_PORTFOLIOS:
+            self.WATCHLIST: list[str] = list(self.B3_PORTFOLIOS[portfolio_mode])
+        else:
+            self.WATCHLIST: list[str] = list(self.B3_PORTFOLIOS["ALL"])
 
         # ── Mapeamento de tickers para o Yahoo Finance ────
         self.YFINANCE_SUFFIX_MAP: Final[dict[str, str]] = {
             ticker: f"{ticker}.SA" for ticker in self.WATCHLIST
         }
 
-        # ── Setores (Correlação e Risco) ──────────────────
+        # ── Setores Completos da B3 (Gestão de Risco Setorial) ───
         self.SECTOR_MAP: Final[dict[str, str]] = {
-            "PETR4": "Petróleo e Gás",
-            "PRIO3": "Petróleo e Gás",
-            "CSAN3": "Petróleo e Gás",
-            "VALE3": "Siderurgia e Mineração",
-            "GGBR4": "Siderurgia e Mineração",
-            "CSNA3": "Siderurgia e Mineração",
-            "ITUB4": "Financeiro",
-            "BBDC4": "Financeiro",
-            "BBAS3": "Financeiro",
-            "BPAC11": "Financeiro",
-            "B3SA3": "Financeiro",
-            "WEGE3": "Bens Industriais",
-            "EMBR3": "Bens Industriais",
-            "RENT3": "Locação",
-            "ABEV3": "Bebidas",
-            "MGLU3": "Varejo",
-            "SUZB3": "Papel e Celulose",
-            "RDOR3": "Saúde",
-            "VIVT3": "Telecom",
-            "TOTS3": "Tecnologia",
+            # Petróleo, Gás e Combustíveis
+            "PETR4": "Petróleo e Gás", "PETR3": "Petróleo e Gás", "PRIO3": "Petróleo e Gás",
+            "RECV3": "Petróleo e Gás", "UGPA3": "Petróleo e Gás", "CSAN3": "Petróleo e Gás",
+            "RAIZ4": "Petróleo e Gás", "ENAT3": "Petróleo e Gás", "VBBR3": "Petróleo e Gás",
+            "RPAO4": "Petróleo e Gás",
+
+            # Mineração e Siderurgia
+            "VALE3": "Siderurgia e Mineração", "GGBR4": "Siderurgia e Mineração",
+            "GOAU4": "Siderurgia e Mineração", "CSNA3": "Siderurgia e Mineração",
+            "USIM5": "Siderurgia e Mineração", "CMIN3": "Siderurgia e Mineração",
+            "UNIP6": "Química", "FESA4": "Siderurgia e Mineração",
+
+            # Financeiro e Seguros
+            "ITUB4": "Financeiro", "BBDC4": "Financeiro", "BBDC3": "Financeiro",
+            "BBAS3": "Financeiro", "SANB11": "Financeiro", "BPAC11": "Financeiro",
+            "B3SA3": "Financeiro", "BBSE3": "Seguros", "CXSE3": "Seguros",
+            "PSSA3": "Seguros", "ITSA4": "Financeiro", "WIZC3": "Seguros",
+
+            # Bens Industriais e Maquinário
+            "WEGE3": "Bens Industriais", "EMBR3": "Bens Industriais", "KEPL3": "Bens Industriais",
+            "TUPY3": "Bens Industriais", "SHUL4": "Bens Industriais", "ROMI3": "Bens Industriais",
+            "POMO4": "Bens Industriais", "MYPK3": "Bens Industriais", "LEVE3": "Bens Industriais",
+
+            # Energia Elétrica e Saneamento
+            "ELET3": "Elétricas", "ELET6": "Elétricas", "CPLE6": "Elétricas",
+            "CMIG4": "Elétricas", "EGIE3": "Elétricas", "TAEE11": "Elétricas",
+            "TRPL4": "Elétricas", "EQTL3": "Elétricas", "ENEV3": "Elétricas",
+            "CPFE3": "Elétricas", "NEOE3": "Elétricas", "SBSP3": "Saneamento",
+            "SAPR11": "Saneamento", "CSMG3": "Saneamento", "ALUP11": "Elétricas",
+
+            # Varejo, Consumo e Alimentos
+            "MGLU3": "Varejo", "LREN3": "Varejo", "ARZZ3": "Varejo", "SOMA3": "Varejo",
+            "VIVA3": "Varejo", "ALPA4": "Varejo", "ABEV3": "Bebidas", "JBSS3": "Alimentos",
+            "BRFS3": "Alimentos", "MRFG3": "Alimentos", "BEEF3": "Alimentos",
+            "SMTO3": "Agro", "SLCE3": "Agro", "ASAI3": "Varejo", "CRFB3": "Varejo",
+            "NTCO3": "Cosméticos", "MDIA3": "Alimentos", "CAML3": "Alimentos",
+
+            # Construção Civil e Imobiliário
+            "CYRE3": "Construção", "EZTC3": "Construção", "MRVE3": "Construção",
+            "DIRR3": "Construção", "CURY3": "Construção", "PLPL3": "Construção",
+            "TEND3": "Construção", "LAVV3": "Construção", "TRIS3": "Construção",
+            "JHSF3": "Construção", "MULT3": "Shoppings", "ALOS3": "Shoppings",
+            "IGTI11": "Shoppings", "LOGG3": "Logística", "EVEN3": "Construção",
+
+            # Saúde e Farmacêutica
+            "RDOR3": "Saúde", "HAPV3": "Saúde", "RADL3": "Saúde", "HYPE3": "Farmacêutica",
+            "FLRY3": "Saúde", "ODPV3": "Saúde", "MATD3": "Saúde", "PARD3": "Saúde",
+            "BLAU3": "Farmacêutica", "VVEO3": "Saúde",
+
+            # Tecnologia e Telecomunicações
+            "TOTS3": "Tecnologia", "VIVT3": "Telecom", "TIMS3": "Telecom",
+            "LWSA3": "Tecnologia", "POSI3": "Tecnologia", "CASH3": "Tecnologia",
+            "INTB3": "Tecnologia", "BMOB3": "Tecnologia",
+
+            # Transporte e Logística
+            "RENT3": "Locação", "RAIL3": "Transporte", "RUMO3": "Transporte",
+            "CCRO3": "Concessões", "ECOR3": "Concessões", "STBP3": "Portos",
+            "TGMA3": "Transporte", "LOGN3": "Transporte", "AZUL4": "Aéreo",
+            "GOLL4": "Aéreo",
+
+            # Papel, Celulose e Madeira
+            "SUZB3": "Papel e Celulose", "KLBN11": "Papel e Celulose",
+            "RANI3": "Papel e Celulose", "DXCO3": "Madeira e Painéis",
+
+            # Educação
+            "YDUQ3": "Educação", "COGN3": "Educação", "ANIM3": "Educação",
+            "SEER3": "Educação",
+
+            # Mineração Ouro
+            "AURA33": "Mineração",
         }
         self.MAX_SECTOR_EXPOSURE: Final[float] = 0.40  # Máximo de 40% da carteira por setor
 
