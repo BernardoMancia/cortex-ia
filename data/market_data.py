@@ -503,7 +503,7 @@ class MarketData:
                 hist = yf_ticker.history(period=period, interval=interval)
 
                 if hist is None or hist.empty:
-                    logger.warning(
+                    logger.debug(
                         "Dados OHLCV vazios para %s (period=%s, interval=%s)",
                         ticker, period, interval,
                     )
@@ -521,14 +521,14 @@ class MarketData:
 
             except Exception as exc:
                 wait_time = self.BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
-                logger.warning(
+                logger.debug(
                     "Erro ao obter OHLCV de %s (tentativa %d/%d): %s — aguardando %.1fs",
                     yf_symbol, attempt, self.MAX_RETRIES, exc, wait_time,
                 )
                 if attempt < self.MAX_RETRIES:
                     time.sleep(wait_time)
 
-        logger.error(
+        logger.debug(
             "Falha ao obter OHLCV de %s após %d tentativas",
             ticker, self.MAX_RETRIES,
         )
