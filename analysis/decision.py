@@ -262,11 +262,12 @@ class DecisionEngine:
         target_quantity: int = 0
 
         if not is_holding:
-            # Avaliar convergência para BUY
-            if (
-                tech_result.signal in (TrendSignal.STRONG_BUY, TrendSignal.BUY)
-                and sent_result.score >= 0.3
-            ):
+            # Avaliar convergência e setup para BUY
+            # Condição: Sinal técnico altista (STRONG_BUY / BUY) e sentimento corporativo não hostil (>= -0.15)
+            is_bullish_tech = tech_result.signal in (TrendSignal.STRONG_BUY, TrendSignal.BUY)
+            sentiment_not_hostile = sent_result.score >= -0.15
+
+            if is_bullish_tech and sentiment_not_hostile:
                 available = self.portfolio.free_cash
                 summary = self.portfolio.get_summary()
                 target_quantity = self.risk_manager.get_max_shares(
@@ -283,13 +284,13 @@ class DecisionEngine:
                 else:
                     action = Action.HOLD
                     logger.info(
-                        '%s: Convergência detectada mas capital insuficiente '
+                        '%s: Setup de compra detectado mas capital/concentração insuficiente '
                         '(disponível: %s, preço: %s)',
                         ticker, format_brl(available), format_brl(current_price),
                     )
             elif (
                 tech_result.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL)
-                and sent_result.score < -0.3
+                and sent_result.score <= -0.2
             ):
                 # Sem posição + sinal de venda → apenas HOLD (não abre short)
                 action = Action.HOLD
@@ -299,7 +300,7 @@ class DecisionEngine:
             # Avaliação de posição existente (stop não atingido)
             if (
                 tech_result.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL)
-                and sent_result.score < -0.3
+                or sent_result.score < -0.3
             ):
                 action = Action.SELL
                 target_quantity = existing_qty
@@ -491,10 +492,15 @@ class DecisionEngine:
                 parts.append(f'→ DECISÃO: MANTER posição em {fractional_ticker}.')
             else:
                 if tech.signal in (TrendSignal.STRONG_BUY, TrendSignal.BUY):
-                    parts.append(
-                        f'Sinal técnico favorável mas sentimento insuficiente '
-                        f'(mínimo: +0,30, atual: {score_fmt}). Aguardando confirmação.'
-                    )
+                    if sent.score < -0.15:
+                        parts.append(
+                            f'Sinal técnico favorável, porém sentimento corporativo desfavorável '
+                            f'(score: {score_fmt} < -0,15). Entrada bloqueada por precaução de risco.'
+                        )
+                    else:
+                        parts.append(
+                            f'Setup de compra identificado. Aguardando alocação de capital disponível.'
+                        )
                 elif tech.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL):
                     parts.append(
                         f'Sinal técnico desfavorável. Sem posição para vender.'
@@ -510,14 +516,16 @@ class DecisionEngine:
     @staticmethod
     def _calculate_confidence(trend_signal: TrendSignal, sentiment_score: float) -> float:
         """
-        Calcula confiança na decisão baseada na convergência de sinais.
+        Calcula confiança na decisão baseada na convergência técnica e sentimento.
 
         Matriz de confiança:
-            - STRONG_BUY + sentimento > 0.7 → 0.95
-            - BUY + sentimento > 0.3 → 0.70
-            - NEUTRAL + qualquer → 0.30
-            - SELL + sentimento < -0.3 → 0.70
-            - STRONG_SELL + sentimento < -0.7 → 0.95
+            - STRONG_BUY + sentimento >= 0.3 → 0.95
+            - STRONG_BUY + sentimento >= 0.0 → 0.85
+            - STRONG_BUY + sentimento >= -0.15 → 0.75
+            - BUY + sentimento >= 0.3 → 0.80
+            - BUY + sentimento >= 0.0 → 0.70
+            - BUY + sentimento >= -0.15 → 0.60
+            - NEUTRAL → 0.30
 
         Args:
             trend_signal: Sinal da análise técnica.
@@ -526,28 +534,50 @@ class DecisionEngine:
         Returns:
             Confiança entre 0.0 e 1.0.
         """
-        if trend_signal == TrendSignal.STRONG_BUY and sentiment_score > 0.7:
-            return 0.95
-        if trend_signal == TrendSignal.STRONG_BUY and sentiment_score > 0.3:
-            return 0.85
-        if trend_signal == TrendSignal.BUY and sentiment_score > 0.3:
-            return 0.70
-        if trend_signal == TrendSignal.BUY and sentiment_score >= 0.0:
-            return 0.55
+        if trend_signal == TrendSignal.STRONG_BUY:
+            if sentiment_score >= 0.3:
+                return 0.95
+            elif sentiment_score >= 0.0:
+                return 0.85
+            elif sentiment_score >= -0.15:
+                return 0.75
+            else:
+                return 0.40
 
-        if trend_signal == TrendSignal.STRONG_SELL and sentiment_score < -0.7:
-            return 0.95
-        if trend_signal == TrendSignal.STRONG_SELL and sentiment_score < -0.3:
-            return 0.85
-        if trend_signal == TrendSignal.SELL and sentiment_score < -0.3:
-            return 0.70
-        if trend_signal == TrendSignal.SELL and sentiment_score <= 0.0:
-            return 0.55
+        if trend_signal == TrendSignal.BUY:
+            if sentiment_score >= 0.3:
+                return 0.80
+            elif sentiment_score >= 0.0:
+                return 0.70
+            elif sentiment_score >= -0.15:
+                return 0.60
+            else:
+                return 0.35
+
+        if trend_signal == TrendSignal.STRONG_SELL:
+            if sentiment_score <= -0.3:
+                return 0.95
+            elif sentiment_score <= 0.0:
+                return 0.85
+            elif sentiment_score <= 0.15:
+                return 0.75
+            else:
+                return 0.40
+
+        if trend_signal == TrendSignal.SELL:
+            if sentiment_score <= -0.3:
+                return 0.80
+            elif sentiment_score <= 0.0:
+                return 0.70
+            elif sentiment_score <= 0.15:
+                return 0.60
+            else:
+                return 0.35
 
         if trend_signal == TrendSignal.NEUTRAL:
             return 0.30
 
-        # Sinais conflitantes (ex: BUY técnico + sentimento negativo)
+        # Sinais conflitantes
         return 0.35
 
     @staticmethod

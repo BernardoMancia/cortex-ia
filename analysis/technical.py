@@ -386,27 +386,27 @@ class TechnicalAnalyzer:
 
         signal = TrendSignal.NEUTRAL
 
-        # STRONG_BUY: alinhamento altista + sobrevendido + MACD pos + Vol alto
-        if ema_9 > ema_21 > ema_50 and rsi < 45 and macd_hist > 0 and rel_vol > 1.2:
+        # STRONG_BUY: alinhamento altista triplo (9>21>50) + RSI saudável (não sobrecomprado) + MACD pos + Vol sólido
+        if ema_9 > ema_21 > ema_50 and 35 <= rsi <= 68 and macd_hist > 0 and rel_vol >= 1.0:
             signal = TrendSignal.STRONG_BUY
-        # STRONG_SELL: alinhamento baixista + sobrecomprado + MACD neg + Vol alto
-        elif ema_9 < ema_21 < ema_50 and rsi > 55 and macd_hist < 0 and rel_vol > 1.2:
+        # STRONG_SELL: alinhamento baixista triplo (9<21<50) + RSI sem sobrevenda extrema + MACD neg + Vol sólido
+        elif ema_9 < ema_21 < ema_50 and 32 <= rsi <= 65 and macd_hist < 0 and rel_vol >= 1.0:
             signal = TrendSignal.STRONG_SELL
-        # BUY: cruzamento altista + RSI sem sobrecompra + MACD pos
-        elif ema_9 > ema_21 and rsi < 60 and macd_hist > 0:
+        # BUY: cruzamento altista ou momentum acima da média + RSI controlado + MACD pos
+        elif (ema_9 > ema_21 or (current_price > ema_50 and ema_9 > ema_50)) and rsi <= 65 and macd_hist > 0:
             signal = TrendSignal.BUY
-        # SELL: cruzamento baixista + RSI sem sobrevenda + MACD neg
-        elif ema_9 < ema_21 and rsi > 40 and macd_hist < 0:
+        # SELL: cruzamento baixista ou perda de médias + RSI sem sobrevenda extrema + MACD neg
+        elif (ema_9 < ema_21 or (current_price < ema_50 and ema_9 < ema_50)) and rsi >= 35 and macd_hist < 0:
             signal = TrendSignal.SELL
 
-        # Aplicar filtro de Bandas de Bollinger
+        # Aplicar filtro de Bandas de Bollinger (evitar comprar no topo extremo esticado)
         if signal in (TrendSignal.BUY, TrendSignal.STRONG_BUY):
-            if current_price > bb_upper:
-                logger.debug("Sinal de compra cancelado: preço acima da Banda de Bollinger superior.")
+            if bb_upper > 0 and current_price > (bb_upper * 1.02):
+                logger.debug("Sinal de compra pausado: preço esticado > 2% acima da Banda de Bollinger superior.")
                 signal = TrendSignal.NEUTRAL
         elif signal in (TrendSignal.SELL, TrendSignal.STRONG_SELL):
-            if current_price < bb_lower:
-                logger.debug("Sinal de venda cancelado: preço abaixo da Banda de Bollinger inferior.")
+            if bb_lower > 0 and current_price < (bb_lower * 0.98):
+                logger.debug("Sinal de venda pausado: preço esticado > 2% abaixo da Banda de Bollinger inferior.")
                 signal = TrendSignal.NEUTRAL
 
         return signal
@@ -425,36 +425,35 @@ class TechnicalAnalyzer:
         Calcula nível de confiança do sinal (0.0 a 1.0).
         """
         if signal == TrendSignal.STRONG_BUY:
-            # Confiança base alta + bônus por RSI muito baixo + bônus volume
-            base = 0.70
-            rsi_bonus = max(0.0, (45.0 - rsi) / 45.0) * 0.10
-            vol_bonus = min(0.15, (rel_vol - 1.0) * 0.1) if rel_vol > 1.0 else 0.0
-            macd_bonus = 0.05 if macd_hist > 0 else 0.0
-            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
+            base = 0.75
+            trend_bonus = 0.10 if (ema_9 > ema_21 > ema_50) else 0.0
+            rsi_bonus = 0.05 if (40.0 <= rsi <= 60.0) else 0.0
+            vol_bonus = min(0.10, max(0.0, (rel_vol - 1.0) * 0.1))
+            return min(1.0, base + trend_bonus + rsi_bonus + vol_bonus)
 
         if signal == TrendSignal.BUY:
-            base = 0.50
-            rsi_bonus = max(0.0, (60.0 - rsi) / 60.0) * 0.15
-            vol_bonus = min(0.10, (rel_vol - 1.0) * 0.05) if rel_vol > 1.0 else 0.0
+            base = 0.60
+            rsi_bonus = 0.05 if (40.0 <= rsi <= 60.0) else 0.0
+            vol_bonus = min(0.10, max(0.0, (rel_vol - 1.0) * 0.05))
             macd_bonus = 0.05 if macd_hist > 0 else 0.0
-            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
+            return min(0.85, base + rsi_bonus + vol_bonus + macd_bonus)
 
         if signal == TrendSignal.NEUTRAL:
             return 0.30
 
         if signal == TrendSignal.SELL:
-            base = 0.50
-            rsi_bonus = max(0.0, (rsi - 60.0) / 40.0) * 0.15
-            vol_bonus = min(0.10, (rel_vol - 1.0) * 0.05) if rel_vol > 1.0 else 0.0
+            base = 0.60
+            rsi_bonus = 0.05 if (40.0 <= rsi <= 60.0) else 0.0
+            vol_bonus = min(0.10, max(0.0, (rel_vol - 1.0) * 0.05))
             macd_bonus = 0.05 if macd_hist < 0 else 0.0
-            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
+            return min(0.85, base + rsi_bonus + vol_bonus + macd_bonus)
 
         if signal == TrendSignal.STRONG_SELL:
-            base = 0.70
-            rsi_bonus = max(0.0, (rsi - 55.0) / 45.0) * 0.10
-            vol_bonus = min(0.15, (rel_vol - 1.0) * 0.1) if rel_vol > 1.0 else 0.0
-            macd_bonus = 0.05 if macd_hist < 0 else 0.0
-            return min(1.0, base + rsi_bonus + vol_bonus + macd_bonus)
+            base = 0.75
+            trend_bonus = 0.10 if (ema_9 < ema_21 < ema_50) else 0.0
+            rsi_bonus = 0.05 if (40.0 <= rsi <= 60.0) else 0.0
+            vol_bonus = min(0.10, max(0.0, (rel_vol - 1.0) * 0.1))
+            return min(1.0, base + trend_bonus + rsi_bonus + vol_bonus)
 
         return 0.30
 

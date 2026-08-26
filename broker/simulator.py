@@ -95,15 +95,17 @@ class SimulatorBroker(BrokerBase):
     @staticmethod
     def _validate_quantity(quantity: int) -> None:
         """
-        Valida que a quantidade esteja dentro do limite fracionário (1–99).
+        Valida que a quantidade esteja dentro do limite operacional permitido.
 
         Raises:
             ValueError: Se a quantidade for inválida.
         """
-        if not isinstance(quantity, int) or quantity < 1 or quantity > 99:
+        min_qty = getattr(settings, "min_quantity", 1)
+        max_qty = getattr(settings, "max_quantity", 50000)
+        if not isinstance(quantity, int) or quantity < min_qty or quantity > max_qty:
             raise ValueError(
                 f"Quantidade inválida: {quantity}. "
-                f"Mercado fracionário aceita de {settings.min_quantity} a {settings.max_quantity} ações."
+                f"Permitido de {min_qty} a {max_qty} ações."
             )
 
     def _generate_ticket(self) -> int:

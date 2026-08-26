@@ -99,21 +99,40 @@ class TestBuyOnConvergence:
         self, engine: DecisionEngine, market_data: MagicMock,
         technical: MagicMock, sentiment: MagicMock,
     ) -> None:
-        """Deve gerar BUY quando trend=BUY e sentiment > 0.3."""
+        """Deve gerar BUY quando trend=BUY e sentiment favorável/neutro."""
         # Configurar mocks
         market_data.get_ohlcv.return_value = _make_candles()
         market_data.get_current_price.return_value = {'last': 30.00}
 
         technical.analyze.return_value = TechnicalResult(signal=TrendSignal.BUY, ema_9=0.0, ema_21=0.0, ema_50=0.0, rsi=50.0, support=0.0, resistance=0.0, confidence=0.7, reasoning='Sinal técnico favorável')
 
-        sentiment.get_sentiment_for_ticker.return_value = SentimentResult(score=0.1, label='POS', confidence=1.0, news_count=1, top_headline='', reasoning='')  # Sentimento fraco
+        sentiment.get_sentiment_for_ticker.return_value = SentimentResult(score=0.4, label='POS', confidence=1.0, news_count=1, top_headline='', reasoning='')
 
         decision = engine.evaluate(
             ticker='PETR4',
             news_items=[]
         )
 
-        # Sentimento fraco → HOLD
+        assert decision.action == Action.BUY
+        assert decision.quantity > 0
+
+    def test_hold_when_technical_buy_but_sentiment_hostile(
+        self, engine: DecisionEngine, market_data: MagicMock,
+        technical: MagicMock, sentiment: MagicMock,
+    ) -> None:
+        """Deve gerar HOLD quando trend=BUY mas sentimento é negativo/hostil."""
+        market_data.get_ohlcv.return_value = _make_candles()
+        market_data.get_current_price.return_value = {'last': 30.00}
+
+        technical.analyze.return_value = TechnicalResult(signal=TrendSignal.BUY, ema_9=0.0, ema_21=0.0, ema_50=0.0, rsi=50.0, support=0.0, resistance=0.0, confidence=0.7, reasoning='Sinal técnico favorável')
+
+        sentiment.get_sentiment_for_ticker.return_value = SentimentResult(score=-0.5, label='NEG', confidence=1.0, news_count=1, top_headline='', reasoning='')
+
+        decision = engine.evaluate(
+            ticker='PETR4',
+            news_items=[]
+        )
+
         assert decision.action == Action.HOLD
 
 
