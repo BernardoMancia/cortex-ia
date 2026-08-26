@@ -181,6 +181,9 @@ class CortexEngine:
             raise RuntimeError('Falha ao conectar broker')
         logger.info('Broker conectado')
 
+        # Sincronizar estado do portfólio em memória com as posições reais do broker
+        self._sync_portfolio_with_broker()
+
         # Banco de dados já inicializado no __init__
         logger.info('Banco de dados pronto')
 
@@ -319,7 +322,8 @@ class CortexEngine:
         cycle_start = datetime.now(BRT)
         logger.info('─── Início do ciclo de trading ───')
 
-        # 1. Atualizar preços
+        # 1. Sincronizar com broker e atualizar preços
+        self._sync_portfolio_with_broker()
         prices = self.market_data.update_prices(self.settings.watchlist)
         self.portfolio.update_prices(prices)
         logger.debug('Preços atualizados para %d ativos', len(prices))
@@ -658,6 +662,33 @@ class CortexEngine:
             self.risk_manager.reset_daily_limits()
             logger.debug('Flags diárias resetadas para %s', today)
 
+    def _sync_portfolio_with_broker(self) -> None:
+        """Sincroniza o portfólio local com as posições e saldo do broker."""
+        try:
+            broker_balance = self.broker.get_balance()
+            broker_positions = self.broker.get_positions()
+
+            with self.portfolio._lock:
+                self.portfolio.free_cash = broker_balance
+                self.portfolio._positions.clear()
+                for bp in broker_positions:
+                    pos = Position(
+                        ticker=bp.ticker,
+                        quantity=bp.quantity,
+                        entry_price=bp.entry_price,
+                        stop_loss=bp.stop_loss or 0.0,
+                        current_price=getattr(bp, 'current_price', bp.entry_price),
+                    )
+                    self.portfolio._positions.append(pos)
+
+            logger.info(
+                'Portfólio sincronizado com broker — Saldo: R$ %.2f, Posições: %d',
+                self.portfolio.free_cash, len(self.portfolio.positions)
+            )
+            self._update_dashboard_state()
+        except Exception as exc:
+            logger.warning('Erro ao sincronizar portfólio com broker: %s', exc)
+
     def _update_dashboard_state(self) -> None:
         """Atualiza o estado compartilhado para o dashboard WebSocket."""
         summary = self.portfolio.get_summary()
@@ -674,6 +705,7 @@ class CortexEngine:
                 'quantity': p.quantity,
                 'entry_price': p.entry_price,
                 'current_price': p.current_price,
+                'stop_loss': p.stop_loss,
                 'pnl': p.pnl,
                 'pnl_percent': p.pnl_percent,
             }
