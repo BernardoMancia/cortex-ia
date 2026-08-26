@@ -725,13 +725,13 @@ class CortexEngine:
 
         watchlist_prices = {}
         for ticker in self.settings.watchlist:
-            try:
-                price_data = self.market_data.get_current_price(ticker)
-                current_price = price_data.get('last', 0.0) if isinstance(price_data, dict) else (price_data or 0.0)
-            except Exception:
-                current_price = self.market_data._price_cache_legacy.get(ticker, 0.0)
-                logger.debug('Preço indisponível para %s, usando cache: %.2f', ticker, current_price)
+            price_data = getattr(self.market_data, '_price_cache', {}).get(ticker)
+            if price_data is not None:
+                current_price = price_data.get('last', 0.0) if isinstance(price_data, dict) else float(price_data)
+            else:
+                current_price = getattr(self.market_data, '_price_cache_legacy', {}).get(ticker, 0.0)
             watchlist_prices[ticker] = current_price
+
         self.dashboard_state.update('watchlist', [
             {'ticker': t, 'price': p} for t, p in watchlist_prices.items()
         ])
