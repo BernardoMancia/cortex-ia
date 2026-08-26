@@ -76,6 +76,14 @@ class Portfolio:
             position.ticker, position.quantity, position.entry_price,
         )
 
+    @staticmethod
+    def _normalize_ticker(ticker: str) -> str:
+        """Normaliza o código do ativo removendo sufixo fracionário 'F' e extensões de bolsa."""
+        t = ticker.upper().split('.')[0]
+        if len(t) > 4 and t.endswith('F') and t[-2].isdigit():
+            return t[:-1]
+        return t
+
     def remove_position(self, ticker: str, sell_price: float) -> Optional[Position]:
         """
         Remove posição do portfólio (venda).
@@ -87,9 +95,10 @@ class Portfolio:
         Returns:
             Posição removida ou None.
         """
+        norm = self._normalize_ticker(ticker)
         with self._lock:
             for i, pos in enumerate(self._positions):
-                if pos.ticker == ticker:
+                if self._normalize_ticker(pos.ticker) == norm:
                     removed = self._positions.pop(i)
                     self.free_cash += sell_price * removed.quantity
                     logger.info(
@@ -111,15 +120,16 @@ class Portfolio:
         Returns:
             A posição atualizada ou None.
         """
+        norm = self._normalize_ticker(ticker)
         with self._lock:
             for pos in self._positions:
-                if pos.ticker == ticker:
+                if self._normalize_ticker(pos.ticker) == norm:
                     if quantity_to_sell >= pos.quantity:
                         return self.remove_position(ticker, sell_price)
-                    
+
                     pos.quantity -= quantity_to_sell
                     self.free_cash += sell_price * quantity_to_sell
-                    
+
                     logger.info(
                         'Posição reduzida (TP): %s — Vendidas %d ações @ R$ %.2f (Restam %d)',
                         ticker, quantity_to_sell, sell_price, pos.quantity
@@ -131,7 +141,8 @@ class Portfolio:
         """Atualiza preços atuais das posições."""
         with self._lock:
             for pos in self._positions:
-                price = prices.get(pos.ticker)
+                norm = self._normalize_ticker(pos.ticker)
+                price = prices.get(pos.ticker) or prices.get(norm)
                 if price is not None:
                     pos.current_price = price
 
@@ -150,10 +161,11 @@ class Portfolio:
             )
 
     def find_position(self, ticker: str) -> Optional[Position]:
-        """Encontra posição aberta de um ativo."""
+        """Encontra posição aberta de um ativo (compatível com fracionário e padrão)."""
+        norm = self._normalize_ticker(ticker)
         with self._lock:
             for pos in self._positions:
-                if pos.ticker == ticker:
+                if self._normalize_ticker(pos.ticker) == norm:
                     return pos
         return None
 

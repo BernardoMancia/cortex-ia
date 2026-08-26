@@ -492,10 +492,13 @@ class DecisionEngine:
 
         elif action == Action.HOLD:
             if position is not None:
+                qty = getattr(position, 'quantity', 0)
+                entry = getattr(position, 'entry_price', 0.0)
+                pos_stop = getattr(position, 'stop_loss', 0.0)
                 parts.append(
-                    f'Posição existente mantida. '
+                    f'Posição existente mantida ({qty} ações com entrada em {format_brl(entry)}). '
                     f'Indicadores em andamento sem gatilho de saída. '
-                    f'Monitorando trailing stop.'
+                    f'Monitorando trailing stop e stop-loss em {format_brl(pos_stop)}.'
                 )
                 parts.append(f'→ DECISÃO: MANTER posição em {fractional_ticker}.')
             else:
