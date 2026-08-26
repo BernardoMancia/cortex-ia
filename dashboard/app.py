@@ -128,6 +128,8 @@ class DashboardServer:
             host=self.host,
             port=self.port,
             log_level="info",
+            loop="asyncio",
+            install_signal_handlers=False,
         )
         self._server = uvicorn.Server(config)
         self._thread = threading.Thread(
