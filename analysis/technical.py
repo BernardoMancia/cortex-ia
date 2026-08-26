@@ -386,17 +386,17 @@ class TechnicalAnalyzer:
 
         signal = TrendSignal.NEUTRAL
 
-        # STRONG_BUY: alinhamento altista triplo (9>21>50) + RSI saudável (não sobrecomprado) + MACD pos + Vol sólido
-        if ema_9 > ema_21 > ema_50 and 35 <= rsi <= 68 and macd_hist > 0 and rel_vol >= 1.0:
+        # STRONG_BUY: alinhamento altista triplo (9>21>50) + preço sustentando acima da EMA9 + RSI saudável + MACD pos + Vol sólido
+        if ema_9 > ema_21 > ema_50 and current_price >= ema_9 and 35 <= rsi <= 68 and macd_hist > 0 and rel_vol >= 1.0:
             signal = TrendSignal.STRONG_BUY
-        # STRONG_SELL: alinhamento baixista triplo (9<21<50) + RSI sem sobrevenda extrema + MACD neg + Vol sólido
-        elif ema_9 < ema_21 < ema_50 and 32 <= rsi <= 65 and macd_hist < 0 and rel_vol >= 1.0:
+        # STRONG_SELL: alinhamento baixista triplo (9<21<50) + preço abaixo da EMA9 + RSI sem sobrevenda extrema + MACD neg + Vol sólido
+        elif ema_9 < ema_21 < ema_50 and current_price <= ema_9 and 32 <= rsi <= 65 and macd_hist < 0 and rel_vol >= 1.0:
             signal = TrendSignal.STRONG_SELL
-        # BUY: cruzamento altista ou momentum acima da média + RSI controlado + MACD pos
-        elif (ema_9 > ema_21 or (current_price > ema_50 and ema_9 > ema_50)) and rsi <= 65 and macd_hist > 0:
+        # BUY: cruzamento altista estrito (EMA9 > EMA21) + preço acima da EMA21 + RSI controlado + MACD pos
+        elif ema_9 > ema_21 and current_price > ema_21 and rsi <= 65 and macd_hist > 0:
             signal = TrendSignal.BUY
-        # SELL: cruzamento baixista ou perda de médias + RSI sem sobrevenda extrema + MACD neg
-        elif (ema_9 < ema_21 or (current_price < ema_50 and ema_9 < ema_50)) and rsi >= 35 and macd_hist < 0:
+        # SELL: cruzamento baixista estrito (EMA9 < EMA21) + preço abaixo da EMA21 + RSI sem sobrevenda extrema + MACD neg
+        elif ema_9 < ema_21 and current_price < ema_21 and rsi >= 35 and macd_hist < 0:
             signal = TrendSignal.SELL
 
         # Aplicar filtro de Bandas de Bollinger (evitar comprar no topo extremo esticado)

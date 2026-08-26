@@ -218,12 +218,15 @@ class DecisionEngine:
             existing_stop = getattr(position, 'stop_loss', None)
             existing_qty = getattr(position, 'quantity', 0)
 
-        # ── 5. Análise de sentimento inteligente (sob demanda) ───────────
+        # ── 5. Análise de sentimento inteligente (sob demanda por ativo) ─
+        # Filtrar notícias exclusivas deste ativo (e seus nomes/aliases corporativos)
+        ticker_news = self._filter_news_for_ticker(ticker, news_items or [])
+
         # Economia de cota da IA: só aciona o Gemini se já temos posição aberta
         # OU se a análise técnica já detectou um sinal de compra/venda (não neutro).
         allow_gemini = is_holding or (tech_result.signal != TrendSignal.NEUTRAL)
         sent_result = self.sentiment.get_sentiment_for_ticker(
-            ticker, news_items or [], allow_gemini=allow_gemini
+            ticker, ticker_news, allow_gemini=allow_gemini
         )
 
         # ── 6. Se posicionado: verificar stop-loss ───────────────────────
@@ -232,6 +235,8 @@ class DecisionEngine:
                 reasoning = self._generate_thinking(
                     ticker, tech_result, sent_result, Action.EMERGENCY_SELL, position,
                     current_price=current_price,
+                    stop_loss=existing_stop,
+                    quantity=existing_qty,
                 )
                 decision = Decision(
                     ticker=ticker,
@@ -316,6 +321,8 @@ class DecisionEngine:
         reasoning = self._generate_thinking(
             ticker, tech_result, sent_result, action, position,
             current_price=current_price,
+            stop_loss=stop_loss,
+            quantity=target_quantity,
         )
 
         decision = Decision(
@@ -399,12 +406,13 @@ class DecisionEngine:
         tech: TechnicalResult,
         sent: SentimentResult,
         action: Action,
-        position: Any = None,
-        *,
+        position: Optional[Position] = None,
         current_price: float = 0.0,
+        stop_loss: float | None = None,
+        quantity: int = 0,
     ) -> str:
         """
-        Gera o 'Pensamento do Córtex' — raciocínio detalhado em português.
+        Gera o texto completo do 'Pensamento do Córtex' em português.
 
         Explica:
             - Setup técnico atual (EMAs, RSI, S/R)
@@ -418,6 +426,9 @@ class DecisionEngine:
             sent: Resultado da análise de sentimento.
             action: Ação decidida.
             position: Posição existente (se houver).
+            current_price: Preço de mercado atual.
+            stop_loss: Stop-loss calculado para a operação.
+            quantity: Quantidade de ações alvo.
 
         Returns:
             Texto rico em português.
@@ -428,66 +439,63 @@ class DecisionEngine:
         # ── Setup técnico ────────────────────────────────────────────────
         parts.append(tech.reasoning)
 
-        # ── Sentimento ───────────────────────────────────────────────────
+        # ── Sentimento Corporativo Individual ────────────────────────────
         score_fmt = f'{sent.score:+.2f}'.replace('.', ',')
-        if sent.label == 'POSITIVO':
-            sentiment_desc = f'Sentimento de mercado: {score_fmt} (otimista)'
-        elif sent.label == 'NEGATIVO':
-            sentiment_desc = f'Sentimento de mercado: {score_fmt} (pessimista)'
-        else:
-            sentiment_desc = f'Sentimento de mercado: {score_fmt} (neutro)'
-
-        if sent.top_headline and sent.top_headline != 'Sem notícias disponíveis':
+        if sent.news_count > 0 and sent.top_headline and sent.top_headline not in ('Sem notícias disponíveis', 'Sem notícias específicas'):
             headline_trunc = (
-                sent.top_headline[:70] + '...'
-                if len(sent.top_headline) > 70
+                sent.top_headline[:75] + '...'
+                if len(sent.top_headline) > 75
                 else sent.top_headline
             )
-            sentiment_desc += f" — última notícia relevante: '{headline_trunc}'"
+            sentiment_desc = f"Sentimento corporativo: {score_fmt} ({sent.label.lower()}) — notícia: '{headline_trunc}'"
+        else:
+            sentiment_desc = f"Sentimento corporativo: {score_fmt} (neutro - sem notícias específicas recentes)"
 
         parts.append(f'{sentiment_desc}.')
 
         # ── Decisão e raciocínio ─────────────────────────────────────────
         if action == Action.EMERGENCY_SELL:
             entry_price = getattr(position, 'entry_price', 0.0) if position else 0.0
-            stop_loss = getattr(position, 'stop_loss', 0.0) if position else 0.0
-            qty = getattr(position, 'quantity', 0) if position else 0
+            pos_stop = getattr(position, 'stop_loss', 0.0) if position else (stop_loss or 0.0)
+            qty = getattr(position, 'quantity', 0) if position else quantity
             parts.append(
-                f'⚠️ STOP-LOSS ATIVADO! Preço atual atingiu ou ultrapassou '
-                f'o stop-loss em {format_brl(stop_loss)}. '
+                f'⚠️ STOP-LOSS ATIVADO! Preço atual ({format_brl(current_price)}) atingiu ou ultrapassou '
+                f'o stop-loss em {format_brl(pos_stop)}. '
                 f'Posição de {qty} ações (entrada em {format_brl(entry_price)}) '
-                f'será liquidada para limitar perdas. '
+                f'liquidada para proteção de capital. '
                 f'→ DECISÃO: VENDA EMERGENCIAL de {qty} ações {fractional_ticker}.'
             )
 
         elif action == Action.BUY:
-            parts.append(
-                f'Convergência técnica + sentimento positivo detectada.'
-            )
-            # Calcular stop-loss para exibição
-            stop_val = self.risk_manager.calculate_stop_loss(current_price) if current_price > 0 else 0.0
-            parts.append(
-                f'Stop-loss calculado em {format_brl(stop_val)} '
-                f'({format_percent(settings.STOP_LOSS_PERCENT)} abaixo do preço de entrada). '
-                f'Risco/retorno favorável.'
-            )
-            # A quantidade é determinada no evaluate(), referenciamos aqui genericamente
+            if sent.score >= 0.20:
+                parts.append('Convergência confirmada: Setup técnico altista com sentimento corporativo favorável.')
+            else:
+                parts.append('Setup técnico altista confirmado com sentimento corporativo estável (sem notícias desfavoráveis).')
+
+            stop_val = stop_loss if (stop_loss and stop_loss > 0) else self.risk_manager.calculate_stop_loss(current_price, atr=tech.atr)
+            if current_price > 0 and stop_val > 0:
+                dist_pct = ((current_price - stop_val) / current_price) * 100.0
+                parts.append(
+                    f'Stop-loss configurado em {format_brl(stop_val)} ({dist_pct:.2f}% abaixo da entrada).'
+                )
+            if quantity > 0:
+                parts.append(f'Ordem dimensionada para {quantity} ações (R$ {quantity * current_price:,.2f}).')
             parts.append(f'→ DECISÃO: COMPRAR ações {fractional_ticker}.')
 
         elif action == Action.SELL:
             parts.append(
-                f'Convergência técnica baixista + sentimento negativo detectada. '
-                f'Indicadores apontam deterioração da posição.'
+                f'Reversão técnica baixista identificada. '
+                f'Indicadores apontam perda de suporte ou médias cruzadas para baixo.'
             )
-            qty = getattr(position, 'quantity', 0) if position else 0
+            qty = getattr(position, 'quantity', 0) if position else quantity
             parts.append(f'→ DECISÃO: VENDER {qty} ações {fractional_ticker}.')
 
         elif action == Action.HOLD:
             if position is not None:
                 parts.append(
                     f'Posição existente mantida. '
-                    f'Indicadores não apresentam convergência para venda. '
-                    f'Monitorando stop-loss.'
+                    f'Indicadores em andamento sem gatilho de saída. '
+                    f'Monitorando trailing stop.'
                 )
                 parts.append(f'→ DECISÃO: MANTER posição em {fractional_ticker}.')
             else:
@@ -580,49 +588,136 @@ class DecisionEngine:
         # Sinais conflitantes
         return 0.35
 
-    @staticmethod
+    TICKER_ALIASES: dict[str, list[str]] = {
+        "PETR4": ["PETR4", "PETR3", "PETROBRAS", "PETROBRÁS"],
+        "VALE3": ["VALE3", "VALE DO RIO DOCE", "VALE"],
+        "ITUB4": ["ITUB4", "ITUB3", "ITAÚ UNIBANCO", "ITAU UNIBANCO", "ITAÚ", "ITAU"],
+        "BBDC4": ["BBDC4", "BBDC3", "BRADESCO"],
+        "BBAS3": ["BBAS3", "BANCO DO BRASIL"],
+        "BBSE3": ["BBSE3", "BB SEGURIDADE", "BB SEGUROS"],
+        "CXSE3": ["CXSE3", "CAIXA SEGURIDADE", "CAIXA SEGUROS"],
+        "SANB11": ["SANB11", "SANTANDER"],
+        "BPAC11": ["BPAC11", "BTG PACTUAL", "BTG"],
+        "B3SA3": ["B3SA3", "B3 "],
+        "ITSA4": ["ITSA4", "ITAÚSA", "ITAUSA"],
+        "WEGE3": ["WEGE3", "WEG"],
+        "RENT3": ["RENT3", "LOCALIZA"],
+        "PRIO3": ["PRIO3", "PRIO", "PETRORIO", "PETRO RIO"],
+        "RECV3": ["RECV3", "PETRORECONCAVO", "PETRORECÔNCAVO"],
+        "BRAV3": ["BRAV3", "BRAVA ENERGIA", "ENAUTA"],
+        "UGPA3": ["UGPA3", "ULTRAPAR", "IPIRANGA"],
+        "VBBR3": ["VBBR3", "VIBRA ENERGIA", "VIBRA", "BR DISTRIBUIDORA"],
+        "CSAN3": ["CSAN3", "COSAN"],
+        "RAIZ4": ["RAIZ4", "RAÍZEN", "RAIZEN"],
+        "GGBR4": ["GGBR4", "GERDAU"],
+        "GOAU4": ["GOAU4", "METALÚRGICA GERDAU", "METALURGICA GERDAU"],
+        "CSNA3": ["CSNA3", "SIDERÚRGICA NACIONAL", "SIDERURGICA NACIONAL", "CSN"],
+        "USIM5": ["USIM5", "USIMINAS"],
+        "CMIN3": ["CMIN3", "CSN MINERAÇÃO", "CSN MINERACAO"],
+        "SUZB3": ["SUZB3", "SUZANO"],
+        "KLBN11": ["KLBN11", "KLABIN"],
+        "MGLU3": ["MGLU3", "MAGALU", "MAGAZINE LUIZA"],
+        "LREN3": ["LREN3", "LOJAS RENNER", "RENNER"],
+        "AZZA3": ["AZZA3", "AZZAS", "AREZZO", "GRUPO SOMA"],
+        "ABEV3": ["ABEV3", "AMBEV"],
+        "ASAI3": ["ASAI3", "ASSAÍ", "ASSAI"],
+        "BEEF3": ["BEEF3", "MINERVA FOODS", "MINERVA"],
+        "RDOR3": ["RDOR3", "REDE D'OR", "REDE DOR"],
+        "HAPV3": ["HAPV3", "HAPVIDA", "NOTRE DAME"],
+        "RADL3": ["RADL3", "RAIADROGASIL", "RAIA DROGASIL", "DROGA RAIA"],
+        "FLRY3": ["FLRY3", "FLEURY"],
+        "HYPE3": ["HYPE3", "HYPERA", "HYPERMARCAS"],
+        "BLAU3": ["BLAU3", "BLAU FARMACEUTICA", "BLAU"],
+        "TOTS3": ["TOTS3", "TOTVS"],
+        "LWSA3": ["LWSA3", "LOCAWEB"],
+        "CASH3": ["CASH3", "MÉLIUZ", "MELIUZ"],
+        "POSI3": ["POSI3", "POSITIVO TECNOLOGIA"],
+        "INTB3": ["INTB3", "INTELBRAS"],
+        "BMOB3": ["BMOB3", "BEMOBI"],
+        "VIVT3": ["VIVT3", "TELEFÔNICA", "TELEFONICA BRASIL", "VIVO"],
+        "TIMS3": ["TIMS3", "TIM BRASIL"],
+        "CMIG4": ["CMIG4", "CEMIG"],
+        "CPFE3": ["CPFE3", "CPFL ENERGIA", "CPFL"],
+        "EGIE3": ["EGIE3", "ENGIE BRASIL", "ENGIE"],
+        "EQTL3": ["EQTL3", "EQUATORIAL ENERGIA", "EQUATORIAL"],
+        "ENEV3": ["ENEV3", "ENEVA"],
+        "TAEE11": ["TAEE11", "TAESA"],
+        "ALUP11": ["ALUP11", "ALUPAR"],
+        "SBSP3": ["SBSP3", "SABESP"],
+        "CSMG3": ["CSMG3", "COPASA"],
+        "SAPR11": ["SAPR11", "SANEPAR"],
+        "CYRE3": ["CYRE3", "CYRELA"],
+        "EZTC3": ["EZTC3", "EZTEC"],
+        "MRVE3": ["MRVE3", "MRV ENGENHARIA", "MRV"],
+        "DIRR3": ["DIRR3", "DIRECIONAL ENGENHARIA", "DIRECIONAL"],
+        "CURY3": ["CURY3", "CURY CONSTRUTORA", "CURY"],
+        "PLPL3": ["PLPL3", "PLANO & PLANO", "PLANO E PLANO"],
+        "TEND3": ["TEND3", "CONSTRUTORA TENDA"],
+        "LAVV3": ["LAVV3", "LAVVI"],
+        "TRIS3": ["TRIS3", "TRISUL"],
+        "JHSF3": ["JHSF3", "JHSF"],
+        "LOGG3": ["LOGG3", "LOG COMMERCIAL PROPERTIES", "LOG CP"],
+        "EVEN3": ["EVEN3", "EVEN CONSTRUTORA"],
+        "ALOS3": ["ALOS3", "ALLOS", "ALIANSCE SONAE"],
+        "MULT3": ["MULT3", "MULTIPLAN"],
+        "IGTI11": ["IGTI11", "IGUATEMI"],
+        "PSSA3": ["PSSA3", "PORTO SEGURO"],
+        "WIZC3": ["WIZC3", "WIZ CO"],
+        "POMO4": ["POMO4", "MARCOPOLO"],
+        "TUPY3": ["TUPY3", "TUPY"],
+        "LEVE3": ["LEVE3", "MAHLE METAL LEVE", "METAL LEVE"],
+        "SHUL4": ["SHUL4", "SCHULZ"],
+        "ROMI3": ["ROMI3", "INDÚSTRIAS ROMI", "INDUSTRIAS ROMI"],
+        "KEPL3": ["KEPL3", "KEPLER WEBER"],
+        "UNIP6": ["UNIP6", "UNIPAR CARBOCLORO", "UNIPAR"],
+        "FESA4": ["FESA4", "FERBASA"],
+        "RANI3": ["RANI3", "IRANI PAPEL", "IRANI"],
+        "MYPK3": ["MYPK3", "IOCHPE-MAXION"],
+        "TGMA3": ["TGMA3", "TEGMA"],
+        "LOGN3": ["LOGN3", "LOG-IN LOGISTICA", "LOG-IN"],
+        "RAIL3": ["RAIL3", "RUMO LOGISTICA", "RUMO"],
+        "SMTO3": ["SMTO3", "SÃO MARTINHO", "SAO MARTINHO"],
+        "SLCE3": ["SLCE3", "SLC AGRICOLA", "SLC AGRÍCOLA"],
+        "DXCO3": ["DXCO3", "DEXCO", "DURATEX"],
+        "BRKM5": ["BRKM5", "BRASKEM"],
+        "YDUQ3": ["YDUQ3", "YDUQS", "ESTÁCIO"],
+        "COGN3": ["COGN3", "COGNA", "KROTON"],
+        "ANIM3": ["ANIM3", "ÂNIMA EDUCAÇÃO", "ANIMA EDUCACAO"],
+        "SEER3": ["SEER3", "SER EDUCACIONAL"],
+        "MDIA3": ["MDIA3", "M. DIAS BRANCO", "M DIAS BRANCO"],
+        "CAML3": ["CAML3", "CAMIL ALIMENTOS", "CAMIL"],
+        "AURA33": ["AURA33", "AURA MINERALS"],
+    }
+
+    @classmethod
     def _filter_news_for_ticker(
-        ticker: str, news_items: list[NewsItem]
+        cls, ticker: str, news_items: list[NewsItem]
     ) -> list[NewsItem]:
         """
-        Filtra notícias relevantes para um ticker específico.
-
-        Verifica se o ticker (ou variantes como PETR4F, PETR4.SA)
-        aparece no título ou resumo da notícia.
+        Filtra notícias relevantes para um ativo específico usando tickers e nomes corporativos.
 
         Args:
-            ticker: Código do ativo.
+            ticker: Código do ativo (ex: 'PETR4').
             news_items: Lista completa de notícias.
 
         Returns:
-            Subconjunto de notícias relevantes ao ticker.
+            Subconjunto de notícias relevantes exclusivamente ao ativo.
         """
         if not news_items:
             return []
 
-        # Variantes do ticker para busca
-        base = ticker.upper()
-        variants = {
-            base,
-            f'{base}F',           # Fracionário
-            f'{base}.SA',         # Yahoo Finance
-            f'{base}.SAO',        # Bloomberg
-        }
-
-        # Também incluir nome parcial (ex: 'PETR' de 'PETR4')
-        base_stem = ''.join(c for c in base if c.isalpha())
-        if len(base_stem) >= 3:
-            variants.add(base_stem)
+        base = ticker.upper().rstrip('F')
+        aliases = cls.TICKER_ALIASES.get(base, [base, f'{base}F', f'{base}.SA'])
+        variants = {a.upper() for a in aliases}
+        variants.add(base)
+        variants.add(f'{base}F')
+        variants.add(f'{base}.SA')
 
         filtered: list[NewsItem] = []
         for item in news_items:
             text = f'{item.title} {item.summary}'.upper()
             if any(v in text for v in variants):
                 filtered.append(item)
-
-        if not filtered:
-            logger.debug('Nenhuma notícia encontrada para %s', ticker)
-            return []
 
         return filtered
 
