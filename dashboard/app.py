@@ -91,18 +91,16 @@ class DashboardState:
 import uvicorn
 
 
+class _ThreadedServer(uvicorn.Server):
+    def install_signal_handlers(self) -> None:
+        # No-op: não tenta instalar signal handlers em thread secundária
+        pass
+
+
 class DashboardServer:
     """
     Wraps :pymod:`uvicorn` so the dashboard can run alongside
     the trading engine in a background daemon thread.
-
-    Usage::
-
-        state  = DashboardState()
-        server = DashboardServer(state, host="0.0.0.0", port=8003)
-        server.start()   # non-blocking
-        ...
-        server.stop()     # graceful shutdown
     """
 
     def __init__(
@@ -114,7 +112,7 @@ class DashboardServer:
         self.state = state
         self.host = host
         self.port = port
-        self._server: uvicorn.Server | None = None
+        self._server: _ThreadedServer | None = None
         self._thread: threading.Thread | None = None
 
         # Expose state on the app so routes can access it
@@ -129,9 +127,8 @@ class DashboardServer:
             port=self.port,
             log_level="info",
             loop="asyncio",
-            install_signal_handlers=False,
         )
-        self._server = uvicorn.Server(config)
+        self._server = _ThreadedServer(config)
         self._thread = threading.Thread(
             target=self._server.run,
             name="cortex-dashboard",
