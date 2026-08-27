@@ -1,5 +1,5 @@
 # ============================================
-# Projeto Córtex - .gitignore
+# Projeto Córtex IA — .gitignore de Produção
 # ============================================
 
 # Ambiente e segredos
@@ -7,7 +7,16 @@
 .env.*
 !.env.example
 
-# Python
+# Backups e Compactados
+backups/
+*.zip
+*.tar.gz
+*.tar
+*.gz
+*.rar
+*.7z
+
+# Python e Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
@@ -24,13 +33,13 @@ build/
 *.manifest
 *.spec
 
-# Virtual environments
+# Ambientes Virtuais
 .venv/
 venv/
 env/
 ENV/
 
-# IDEs
+# IDEs e Editores
 .idea/
 .vscode/
 *.swp
@@ -40,50 +49,60 @@ ENV/
 .settings/
 .classpath
 
-# Logs
+# Logs e Saídas de Diagnóstico
 logs/
 *.log
+*.log.*
+*_log.txt
+*output*.txt
+*audit*.txt
+*result*.txt
+*test*.txt
+*status*.txt
 
-# Banco de dados
+# Banco de Dados e Estado Runtime
 *.db
+*.db-journal
 *.sqlite
 *.sqlite3
+data/*.db
+data/simulator_state.json
 
-# Modelos ML
-models/
-*.onnx
-*.pt
-*.pth
-*.bin
-*.h5
+# Modelos ML e Pesos
+models/*.onnx
+models/*.pt
+models/*.pth
+models/*.bin
+models/*.h5
 
-# Sistema operacional
+# Sistema Operacional
 Thumbs.db
 .DS_Store
 desktop.ini
 ehthumbs.db
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Pytest / Coverage
+# Pytest / Cobertura
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .nox/
-
-# mypy / type checkers
 .mypy_cache/
-.pytype/
-.pyre/
 
-# Dados temporários
+# Dados Temporários e Scratch
 tmp/
 temp/
 *.tmp
 *.bak
+.temp_*
 
-# MetaTrader
-*.ex5
-*.set
+# Scripts temporários de VPS/Deploy local
+audit_vps.py
+deploy_cache.py
+remote_engine.py
+start_remote.py
+check_*.py
+force_reset.py
+reset_data.py
+update_env.py
+allow_port.py
