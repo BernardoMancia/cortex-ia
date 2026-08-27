@@ -1,15 +1,23 @@
-# Córtex IA — v2.5.0
+# Córtex IA — v2.5.0 (Branch: feature/auth-dashboard)
 
-**Sistema Autônomo de Inteligência Quantitativa e Algorithmic Trading para a B3**
+**Sistema Autônomo de Inteligência Quantitativa, Algorithmic Trading e Dashboard Seguro para a B3**
 
-O **Córtex IA** é um ecossistema autônomo de negociação quantitativa e gerenciamento de portfólio para o mercado de ações brasileiro (**B3**). O sistema opera de forma contínua combinando **Análise Técnica Multitemporal**, **Processamento de Linguagem Natural (NLP) para Sentimento de Notícias** e **Gerenciamento de Risco Rigoroso** com Trailing Stop dinâmico.
+O **Córtex IA** é um ecossistema autônomo de negociação quantitativa e gerenciamento de portfólio para o mercado de ações brasileiro (**B3**). O sistema opera de forma contínua combinando **Análise Técnica Multitemporal**, **Processamento de Linguagem Natural (NLP) para Sentimento de Notícias**, **Gerenciamento de Risco Rigoroso** com Trailing Stop dinâmico e uma **Interface Web Segura com Autenticação de Nível Bancário**.
 
-Monitora em tempo real um universo de **101 ações líquidas da B3** (ações padrão e mercado fracionário), executa ordens de forma inteligente, gerencia o ciclo de vida das posições e disponibiliza um **Dashboard Web em Tempo Real** 100% responsivo para desktop, tablets e smartphones.
+Monitora em tempo real um universo de **101 ações líquidas da B3** (ações padrão e mercado fracionário), executa ordens de forma inteligente, gerencia o ciclo de vida das posições e disponibiliza um **Dashboard Web em Tempo Real Ultra-Fluido** 100% responsivo para desktop, tablets e smartphones.
 
 ---
 
 ## 🌟 Funcionalidades Principais
 
+- **Segurança e Autenticação de Nível Bancário**:
+  - **Criptografia Forte**: Hashing de senhas com **PBKDF2-HMAC-SHA256** (100.000 iterações) e Salt criptográfico único de 32 bytes por usuário.
+  - **Prevenção Total contra Injeção SQL**: 100% das consultas utilizam parâmetros vinculados (*Prepared Statements* `?`).
+  - **Proteção contra Força Bruta & DDoS (Rate Limiting)**: Máximo de 5 tentativas inválidas por minuto; bloqueio temporário do IP por 15 minutos.
+  - **Fluxo de Primeiro Acesso Obrigatório**: Inicialização com credenciais de fábrica (`Admin` / `Admin`) e troca obrigatória no primeiro login com medidor dinâmico de força de senha.
+  - **Gerenciamento de Sessão com Logout por Inatividade**: Sessão máxima de 8 horas e encerramento automático após 15 minutos de inatividade com aviso prévio de 60 segundos.
+  - **Headers de Proteção HTTP**: Inclusão de `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` e `X-XSS-Protection`.
+  - **Script CLI de Recuperação de Senha**: Utilitário autônomo para redefinir credenciais ou restaurar o padrão de fábrica via terminal.
 - **Análise Técnica Avançada**: Médias Móveis Exponenciais (EMA 9, 21, 50), MACD, RSI e detecção de rompimentos e tendências.
 - **Análise de Sentimento (NLP Financeiro)**: Escaneamento e pontuação contínua de notícias de portais financeiros (InfoMoney, Money Times, Investing, Google News).
 - **Gerenciamento de Risco e Capital**:
@@ -17,19 +25,18 @@ Monitora em tempo real um universo de **101 ações líquidas da B3** (ações p
   - **Stop-Loss Inicial**: Proteção estrita contra volatilidade adversa.
   - **Normalização de Tickers**: Suporte transparente para lotes padrão e fracionário (ex: `PETR4` e `PETR4F`).
   - **Controle de Concentração**: Limite máximo de exposição por ativo (25%) e travas diárias.
-- **Sincronização Bidirecional Portfolio ⇄ Broker**:
-  - Sincronização automática na inicialização e antes de cada ciclo de trading, garantindo consistência total entre saldo, posições abertas e custódia.
+- **Sincronização Bidirecional Portfolio ⇄ Broker**: Sincronização automática na inicialização e antes de cada ciclo de trading.
 - **Execução Híbrida**:
   - `SimulatorBroker`: Ambiente completo de paper trading de alta fidelidade com persistência em banco SQLite e JSON.
   - `MT5Broker` / `RESTBridge`: Integração com MetaTrader 5 (Windows) para envio real de ordens com corretagem zero.
-- **Dashboard Web Multi-Dispositivo (Mobile-First)**:
+- **Dashboard Web Multi-Dispositivo Ultra-Fluido (Mobile-First)**:
   - Interface moderna Fintech / Glassmorphism de alto contraste.
+  - Atualização rápida a cada **1.5 segundos** com renderização diferencial (zero flickeamento de tela).
   - Navegação fluida por abas em celulares e tablets (*Visão Geral, Carteira, Cérebro IA, Terminal, Notícias*).
   - Visualização alternável: **Tabela Completa** e **Cards Tácteis** para smartphones.
-  - Gráfico de Alocação interativo High-DPI com chips percentuais em tempo real.
-  - Terminal de logs ao vivo via **WebSockets** com realce de sintaxe por nível (`INFO`, `WARNING`, `ERROR`).
+  - Terminal de logs ao vivo via **WebSockets Protegidos** com realce de sintaxe (`INFO`, `WARNING`, `ERROR`).
 - **Sistema de Notificações**: Alertas automáticos via Telegram para compras, vendas, stop-loss e relatórios diários.
-- **Suíte de Testes Automatizados**: Mais de 70 testes unitários cobrindo tomada de decisão, gestão de risco, calendário B3 e análise técnica.
+- **Suíte de Testes Automatizados**: **79 testes unitários e de integração** cobrindo autenticação, segurança, risco, agendamento B3 e análise técnica.
 
 ---
 
@@ -68,7 +75,7 @@ Monitora em tempo real um universo de **101 ações líquidas da B3** (ações p
 |                v                                 v                       |
 |       +-----------------+               +-----------------+              |
 |       |     Broker      |               | Dashboard Server|              |
-|       | (Simulator/MT5) |               |  (FastAPI / WS) |              |
+|       | (Simulator/MT5) |               | (Auth/WS/FastAPI|              |
 |       +-----------------+               +-----------------+              |
 +--------------------------------------------------------------------------+
 ```
@@ -90,7 +97,7 @@ O Córtex IA conta com um **instalador universal automatizado** que detecta seu 
 
 ### 1. Clonar o repositório:
 ```bash
-git clone https://github.com/BernardoMancia/cortex-ia.git
+git clone -b feature/auth-dashboard https://github.com/BernardoMancia/cortex-ia.git
 cd cortex-ia
 ```
 
@@ -103,7 +110,7 @@ cd cortex-ia
 
 ---
 
-### 4. Configurar variáveis de ambiente (`.env`):
+### 3. Configurar variáveis de ambiente (`.env`):
 Crie ou edite o arquivo `.env` na raiz do projeto:
 
 ```ini
@@ -127,6 +134,12 @@ TELEGRAM_CHAT_ID=seu_chat_id_aqui
 # Configurações do Dashboard Web
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=8003
+
+# Segurança e Sessão
+AUTH_MAX_IDLE_SECONDS=900
+AUTH_MAX_SESSION_SECONDS=28800
+AUTH_MAX_LOGIN_ATTEMPTS=5
+AUTH_LOCKOUT_SECONDS=900
 
 # Intervalos de Execução (em segundos)
 TRADING_CYCLE_INTERVAL=60
@@ -168,26 +181,37 @@ python main.py --dashboard-only
 
 ---
 
-## 🖥️ Acesso ao Dashboard Web
+## 🖥️ Acesso Seguro ao Dashboard Web
 
 Quando o Córtex está ativo, o painel web fica acessível em:
 
 - **Localmente:** `http://localhost:8003` (ou porta configurada)
 - **No Servidor / VPS:** `http://ip_servidor:8003`
 
-### Recursos do Dashboard:
-- **Resumo Financeiro:** Patrimônio total, saldo em caixa livre, alocação e P&L consolidado.
-- **Custódia em Tempo Real:** Tabela e cards com cotação atual, preço médio, stop-loss e trailing stop.
-- **Radar do Cérebro IA:** Feed filtrável com os pensamentos, análises técnicas e decisões de cada ativo.
-- **Gráfico de Alocação:** Visualização doughnut responsiva com legenda dinâmica por ativo.
-- **Terminal ao Vivo:** Stream de logs com syntax highlighting, pausa e busca textual.
-- **Notícias da B3:** Últimas notícias financeiras capturadas pelo scraper com links originais.
+### 🔑 Primeiro Acesso:
+1. Acesse o Dashboard pelo navegador; você será redirecionado para a tela `/login`.
+2. Digite as credenciais padrão de fábrica:
+   - **Usuário:** `Admin`
+   - **Senha:** `Admin`
+3. O **Modal de Primeiro Acesso** será exibido solicitando que você defina seu **novo nome de usuário** e uma **nova senha pessoal forte**.
+4. Após salvar, o acesso ao Dashboard será liberado.
+
+### 🛡️ Recuperação / Redefinição de Senha via CLI:
+Caso esqueça suas credenciais ou precise redefinir a senha do Dashboard:
+
+```bash
+# Redefinir para um usuário e senha específicos:
+python scripts/reset_password.py --username meu_usuario --password MinhaNovaSenha123!
+
+# Restaurar credenciais de fábrica (Admin / Admin com troca obrigatória):
+python scripts/reset_password.py --restore-factory-default
+```
 
 ---
 
 ## 🧪 Testes Automatizados
 
-Para rodar a suíte completa de testes unitários e de integração:
+Para rodar a suíte completa de testes unitários e de integração (**79 testes**):
 
 ```bash
 pytest tests/ -v
@@ -228,4 +252,3 @@ Consulte o arquivo [LICENSE](LICENSE) para os termos completos.
 ## ⚠️ Aviso Legal e Isenção de Responsabilidade (Disclaimer)
 
 O **Córtex IA** é um sistema experimental de inteligência computacional e algoritmos quantitativos. Este projeto **não constitui recomendação de investimento**, consultoria financeira ou solicitação de compra/venda de ativos mobiliários. Operações em renda variável na B3 envolvem riscos substanciais de perda patrimonial. O autor não se responsabiliza por quaisquer decisões financeiras ou prejuízos decorrentes do uso direto ou indireto deste software.
-
