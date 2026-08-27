@@ -171,7 +171,7 @@ Quando o sistema está rodando, o Dashboard fica acessível via web.
 Acesse no seu navegador:
 
 **Localmente:** `http://localhost:8000`  
-**Na VPS:** `http://IP_DA_VPS:8000`
+**Na VPS:** `http://ip_servidor:8000`
 
 O dashboard exibirá:
 - Status de Conexão com o motor.
