@@ -113,7 +113,34 @@ CREATE TABLE IF NOT EXISTS news_items (
     scraped_at      TEXT    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    username                TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash           TEXT    NOT NULL,
+    salt                    TEXT    NOT NULL,
+    must_change_password    INTEGER NOT NULL DEFAULT 1,
+    failed_login_attempts   INTEGER NOT NULL DEFAULT 0,
+    locked_until            TEXT,
+    created_at              TEXT    NOT NULL,
+    updated_at              TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_token       TEXT    NOT NULL UNIQUE,
+    user_id             INTEGER NOT NULL,
+    ip_address          TEXT,
+    user_agent          TEXT,
+    created_at          TEXT    NOT NULL,
+    last_active_at      TEXT    NOT NULL,
+    expires_at          TEXT    NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Índices para consultas frequentes
+CREATE INDEX IF NOT EXISTS idx_users_username      ON users(username);
+CREATE INDEX IF NOT EXISTS idx_sessions_token      ON sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_sessions_user       ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_trades_ticker      ON trades(ticker);
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp    ON trades(timestamp);
 CREATE INDEX IF NOT EXISTS idx_sentiment_ticker    ON sentiment_scores(ticker);
@@ -172,6 +199,19 @@ class DatabaseManager:
         try:
             with self._get_connection() as conn:
                 conn.executescript(_CREATE_TABLES_SQL)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM users")
+                if cursor.fetchone()[0] == 0:
+                    from auth import PasswordManager
+                    p_hash, p_salt = PasswordManager.hash_password("Admin")
+                    now_str = _now_brt_iso()
+                    cursor.execute(
+                        """
+                        INSERT INTO users (username, password_hash, salt, must_change_password, created_at, updated_at)
+                        VALUES (?, ?, ?, 1, ?, ?)
+                        """,
+                        ("Admin", p_hash, p_salt, now_str, now_str)
+                    )
             logger.info("Banco de dados inicializado: %s", self.db_path)
         except sqlite3.Error as exc:
             logger.critical("Falha ao inicializar banco de dados: %s", exc)
@@ -901,3 +941,128 @@ class DatabaseManager:
 
     def __repr__(self) -> str:
         return f"DatabaseManager(db_path={self.db_path})"
+
+    def get_user_by_username(self, username: str) -> dict[str, Any] | None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = ?", (username.strip(),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: int) -> dict[str, Any] | None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def create_user(self, username: str, password: str, must_change_password: bool = False) -> int:
+        from auth import PasswordManager
+        p_hash, p_salt = PasswordManager.hash_password(password)
+        now_str = _now_brt_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO users (username, password_hash, salt, must_change_password, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (username.strip(), p_hash, p_salt, 1 if must_change_password else 0, now_str, now_str)
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def update_user_credentials(self, user_id: int, new_username: str, new_password: str) -> bool:
+        from auth import PasswordManager
+        p_hash, p_salt = PasswordManager.hash_password(new_password)
+        now_str = _now_brt_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE users
+                SET username = ?, password_hash = ?, salt = ?, must_change_password = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_username.strip(), p_hash, p_salt, now_str, user_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def reset_user_password(self, username: str, new_password: str, force_first_login: bool = True) -> bool:
+        from auth import PasswordManager
+        p_hash, p_salt = PasswordManager.hash_password(new_password)
+        now_str = _now_brt_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE users
+                SET password_hash = ?, salt = ?, must_change_password = ?, failed_login_attempts = 0, locked_until = NULL, updated_at = ?
+                WHERE username = ?
+                """,
+                (p_hash, p_salt, 1 if force_first_login else 0, now_str, username.strip())
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def create_session(self, user_id: int, ip_address: str = "", user_agent: str = "", max_session_seconds: int = 28800) -> str:
+        import secrets
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(tz=_BRT)
+        now_str = now.isoformat()
+        expires_str = (now + timedelta(seconds=max_session_seconds)).isoformat()
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO sessions (session_token, user_id, ip_address, user_agent, created_at, last_active_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (token, user_id, ip_address, user_agent, now_str, now_str, expires_str)
+            )
+            conn.commit()
+            return token
+
+    def get_valid_session(self, token: str, max_idle_seconds: int = 900) -> dict[str, Any] | None:
+        now = datetime.now(tz=_BRT)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM sessions WHERE session_token = ?", (token,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            sess = dict(row)
+
+            expires_at = datetime.fromisoformat(sess["expires_at"])
+            if now > expires_at:
+                self.revoke_session(token)
+                return None
+
+            last_active = datetime.fromisoformat(sess["last_active_at"])
+            if (now - last_active).total_seconds() > max_idle_seconds:
+                self.revoke_session(token)
+                return None
+
+            return sess
+
+    def touch_session(self, token: str) -> None:
+        now_str = _now_brt_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE sessions SET last_active_at = ? WHERE session_token = ?", (now_str, token))
+            conn.commit()
+
+    def revoke_session(self, token: str) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE session_token = ?", (token,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def revoke_all_user_sessions(self, user_id: int) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            conn.commit()

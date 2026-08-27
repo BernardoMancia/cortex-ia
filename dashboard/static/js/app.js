@@ -1,5 +1,96 @@
 
 
+let idleTimer = null;
+let warningCountdownInterval = null;
+let idleSecondsLeft = 60;
+const MAX_IDLE_SECONDS = 900;
+const WARNING_SECONDS = 60;
+let lastActivityTime = Date.now();
+
+async function checkAuthAndSetupUser() {
+    try {
+        const res = await fetch('/api/auth/me');
+        if (!res.ok) {
+            window.location.href = '/login';
+            return;
+        }
+        const user = await res.json();
+        const nameEl = document.getElementById('user-display-name');
+        if (nameEl) nameEl.textContent = user.username;
+    } catch (e) {
+        window.location.href = '/login';
+    }
+}
+
+async function performLogout(reason = '') {
+    try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) {}
+    window.location.href = reason ? `/login?reason=${reason}` : '/login';
+}
+
+function setupIdleTimeout() {
+    const modal = document.getElementById('modal-idle-warning');
+    const countdownEl = document.getElementById('idle-countdown');
+    const btnStay = document.getElementById('btn-stay-logged');
+    const btnLogout = document.getElementById('btn-logout');
+
+    if (btnLogout) {
+        btnLogout.addEventListener('click', () => performLogout());
+    }
+
+    if (btnStay) {
+        btnStay.addEventListener('click', () => {
+            resetIdleTimer();
+            if (modal) modal.style.display = 'none';
+            fetch('/api/auth/heartbeat', { method: 'POST' }).catch(() => {});
+        });
+    }
+
+    function showIdleWarning() {
+        if (modal) modal.style.display = 'flex';
+        idleSecondsLeft = WARNING_SECONDS;
+        if (countdownEl) countdownEl.textContent = idleSecondsLeft;
+
+        clearInterval(warningCountdownInterval);
+        warningCountdownInterval = setInterval(() => {
+            idleSecondsLeft--;
+            if (countdownEl) countdownEl.textContent = idleSecondsLeft;
+            if (idleSecondsLeft <= 0) {
+                clearInterval(warningCountdownInterval);
+                performLogout('idle');
+            }
+        }, 1000);
+    }
+
+    function resetIdleTimer() {
+        lastActivityTime = Date.now();
+        clearInterval(warningCountdownInterval);
+        if (modal) modal.style.display = 'none';
+
+        clearTimeout(idleTimer);
+
+        idleTimer = setTimeout(showIdleWarning, (MAX_IDLE_SECONDS - WARNING_SECONDS) * 1000);
+    }
+
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    activityEvents.forEach(evt => {
+        window.addEventListener(evt, () => {
+
+            if (!modal || modal.style.display === 'none') {
+                const now = Date.now();
+                if (now - lastActivityTime > 30000) {
+                    fetch('/api/auth/heartbeat', { method: 'POST' }).catch(() => {});
+                    lastActivityTime = now;
+                }
+                resetIdleTimer();
+            }
+        }, { passive: true });
+    });
+
+    resetIdleTimer();
+}
+
 let state = {
     equity: 0,
     balance: 0,
@@ -566,6 +657,8 @@ function setupWebSocket() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    checkAuthAndSetupUser();
+    setupIdleTimeout();
     setupTabs();
     setupViewToggle();
     setupSearch();
@@ -581,7 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchProductionBalance();
     fetchNews();
 
-    setInterval(fetchStatus, 3000);
+    setInterval(fetchStatus, 1500);
     setInterval(fetchProductionBalance, 10000);
     setInterval(fetchNews, 60000);
 });

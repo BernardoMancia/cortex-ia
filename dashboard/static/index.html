@@ -39,6 +39,18 @@
                         <span class="label-tiny">CONTA REAL</span>
                         <span class="val" id="prod-balance">R$ --,--</span>
                     </div>
+                                    <div class="user-profile-badge">
+                        <div class="user-avatar-tiny">👤</div>
+                        <span class="user-name" id="user-display-name">Carregando...</span>
+                        <button id="btn-logout" class="btn-logout" title="Encerrar Sessão">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                                <polyline points="16 17 21 12 16 7"></polyline>
+                                <line x1="21" y1="12" x2="9" y2="12"></line>
+                            </svg>
+                            <span>Sair</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </header>
@@ -234,5 +246,24 @@
     </div>
 
     <script src="/static/js/app.js"></script>
+
+    <div id="modal-idle-warning" class="modal-overlay" style="display: none;">
+        <div class="modal-card idle-modal-card">
+            <div style="color: #f59e0b; margin-bottom: 0.75rem;">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                </svg>
+            </div>
+            <h3 style="margin: 0; color: #ffffff; font-size: 1.25rem; font-weight: 800;">Aviso de Inatividade</h3>
+            <p style="font-size: 0.875rem; color: #94a3b8; margin: 0.75rem 0 1.5rem 0; line-height: 1.4;">
+                Por segurança, sua sessão será encerrada em <strong id="idle-countdown" style="color: #60a5fa; font-size: 1.15rem; font-family: 'JetBrains Mono', monospace;">60</strong> segundos.
+            </p>
+            <button id="btn-stay-logged" class="btn-stay-logged">
+                <span>Continuar Conectado</span>
+            </button>
+        </div>
+    </div>
+
 </body>
 </html>

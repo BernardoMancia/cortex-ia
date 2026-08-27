@@ -1,28 +1,53 @@
-from fastapi import FastAPI
+import os
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, RedirectResponse
 from dashboard.routes import router
-import os
+from auth import extract_session_token, MAX_IDLE_SECONDS
+from data.database import DatabaseManager
 
 app = FastAPI(title="Córtex IA Dashboard")
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    return response
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-from fastapi.responses import FileResponse
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 app.include_router(router)
 
+@app.get("/login")
+async def login_page():
+    login_path = os.path.join(static_dir, "login.html")
+    if os.path.exists(login_path):
+        return FileResponse(login_path)
+    return {"message": "Página de login."}
+
 @app.get("/")
-async def root():
+async def root(request: Request):
+    token = extract_session_token(request)
+    if not token:
+        return RedirectResponse(url="/login")
+    
+    db = DatabaseManager()
+    session = db.get_valid_session(token, max_idle_seconds=MAX_IDLE_SECONDS)
+    if not session:
+        return RedirectResponse(url="/login?reason=expired")
+
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
@@ -32,13 +57,6 @@ import threading
 from datetime import datetime, timezone
 
 class DashboardState:
-    """
-    Holds runtime dashboard state that the engine pushes into
-    and the dashboard API reads from.
-
-    Thread-safe: all mutations go through :pymeth:`update`.
-    """
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._state: dict = {
@@ -53,25 +71,21 @@ class DashboardState:
         }
 
     def update(self, key: str, value) -> None:
-        """Update a single key in the dashboard state."""
         with self._lock:
             self._state[key] = value
             self._state["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     def add_log_line(self, line: str, max_lines: int = 500) -> None:
-        """Append a log line, keeping the buffer bounded."""
         with self._lock:
             self._state["log_lines"].append(line)
             if len(self._state["log_lines"]) > max_lines:
                 self._state["log_lines"] = self._state["log_lines"][-max_lines:]
 
     def get_state(self) -> dict:
-        """Return a shallow copy of the current state."""
         with self._lock:
             return dict(self._state)
 
     def get(self, key: str, default=None):
-        """Return a single value from the state."""
         with self._lock:
             return self._state.get(key, default)
 
@@ -82,11 +96,6 @@ class _ThreadedServer(uvicorn.Server):
         pass
 
 class DashboardServer:
-    """
-    Wraps :pymod:`uvicorn` so the dashboard can run alongside
-    the trading engine in a background daemon thread.
-    """
-
     def __init__(
         self,
         state: DashboardState | None = None,
@@ -103,7 +112,6 @@ class DashboardServer:
             app.state.dashboard_state = state
 
     def start(self) -> None:
-        """Start uvicorn in a daemon thread (non-blocking)."""
         config = uvicorn.Config(
             app=app,
             host=self.host,
@@ -120,12 +128,10 @@ class DashboardServer:
         self._thread.start()
 
     def stop(self) -> None:
-        """Signal uvicorn to shut down gracefully."""
         if self._server is not None:
             self._server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=5)
 
 def create_app() -> FastAPI:
-    """Return the pre-configured FastAPI application instance."""
     return app
