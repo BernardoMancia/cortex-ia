@@ -84,7 +84,9 @@ Monitora em tempo real um universo de **101 ações líquidas da B3** (ações p
 
 ---
 
-## 🚀 Instalação e Configuração
+## 🚀 Instalação e Configuração Rápida (1-Click)
+
+O Córtex IA conta com um **instalador universal automatizado** que detecta seu sistema operacional (Windows, Linux, macOS ou Servidor VPS), cria o ambiente virtual `.venv`, atualiza ferramentas, instala todas as dependências compatíveis, cria as pastas estruturais e valida a integridade do sistema.
 
 ### 1. Clonar o repositório:
 ```bash
@@ -92,21 +94,14 @@ git clone https://github.com/BernardoMancia/cortex-ia.git
 cd cortex-ia
 ```
 
-### 2. Criar e ativar o ambiente virtual:
-```bash
-# Linux / macOS:
-python3 -m venv .venv
-source .venv/bin/activate
+### 2. Executar o Instalador Automático:
 
-# Windows:
-python -m venv .venv
-.venv\Scripts\activate
-```
+- **No Windows:**
+  - Execute via terminal: `python bootstrap.py` (ou dê 2 cliques no arquivo `setup.bat`)
+- **No Linux / VPS / macOS:**
+  - Execute no terminal: `bash setup.sh` (ou `python3 bootstrap.py`)
 
-### 3. Instalar as dependências:
-```bash
-pip install -r requirements.txt
-```
+---
 
 ### 4. Configurar variáveis de ambiente (`.env`):
 Crie ou edite o arquivo `.env` na raiz do projeto:
