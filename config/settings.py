@@ -85,8 +85,9 @@ class Settings:
         self._initialized = True
         self.VERBOSE: bool = verbose
 
-        # ── Diretório raiz ─────────────────────────────────
+        # ── Diretório raiz e Versão ────────────────────────
         self.PROJECT_ROOT: Final[Path] = _PROJECT_ROOT
+        self.VERSION: Final[str] = "2.5.0"
 
         # ── Modo de execução ──────────────────────────────
         self.SIMULATION_MODE: bool = (

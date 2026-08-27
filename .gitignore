@@ -7,16 +7,10 @@
 .env.*
 !.env.example
 
-# Logs e status runtime
-dashboard_log.txt
-engine_log.txt
-status.txt
-cortex-ia.tar.gz
-
 # Python
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 *.pyo
 *.pyd
 *.so
@@ -50,19 +44,18 @@ ENV/
 logs/
 *.log
 
-# Banco de dados e estado runtime
+# Banco de dados
 *.db
 *.sqlite
 *.sqlite3
-data/*.db
-data/simulator_state.json
 
 # Modelos ML
-models/*.onnx
-models/*.pt
-models/*.pth
-models/*.bin
-models/*.h5
+models/
+*.onnx
+*.pt
+*.pth
+*.bin
+*.h5
 
 # Sistema operacional
 Thumbs.db
