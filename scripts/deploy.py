@@ -20,7 +20,7 @@ ssh.connect(host, port, user, password)
 print("Starting upload via SCP...")
 with SCPClient(ssh.get_transport()) as scp:
     for item in os.listdir(local_dir):
-        if item in ['.git', 'venv', '__pycache__', 'cortex.db', 'simulator_state.json', '.env']:
+        if item in ['.git', 'venv', '.venv', '__pycache__', 'cortex.db', 'simulator_state.json', '.env', 'GIT', 'backups', 'scratch']:
             continue
         local_path = os.path.join(local_dir, item)
         print(f"Uploading {item}...")
