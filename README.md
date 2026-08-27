@@ -220,7 +220,17 @@ journalctl -u cortex-ia.service -f
 
 ---
 
-## 📄 Licença
+## 📜 Licença e Termos de Uso
 
-Este projeto é distribuído sob a licença **MIT**. Veja o arquivo `LICENSE` para mais detalhes.
+**Copyright © 2026 Bernardo Mancia. Todos os direitos reservados.**
+
+Este repositório é disponibilizado publicamente exclusivamente para fins de **demonstração técnica, portfólio profissional e auditoria educacional**. É expressamente proibida a reprodução, cópia, redistribuição ou exploração comercial sem autorização prévia por escrito.
+
+Consulte o arquivo [LICENSE](LICENSE) para os termos completos.
+
+---
+
+## ⚠️ Aviso Legal e Isenção de Responsabilidade (Disclaimer)
+
+O **Córtex IA** é um sistema experimental de inteligência computacional e algoritmos quantitativos. Este projeto **não constitui recomendação de investimento**, consultoria financeira ou solicitação de compra/venda de ativos mobiliários. Operações em renda variável na B3 envolvem riscos substanciais de perda patrimonial. O autor não se responsabiliza por quaisquer decisões financeiras ou prejuízos decorrentes do uso direto ou indireto deste software.
 
