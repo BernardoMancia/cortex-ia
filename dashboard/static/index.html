@@ -2,87 +2,250 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Córtex IA - Intelligence Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Córtex IA — Terminal de Operações B3</title>
+    <meta name="description" content="Dashboard autônomo de inteligência quantitativa e execução para o mercado B3.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-    <div class="dashboard-container">
-        <header class="header glass-panel">
-            <div class="logo">
-                <div class="pulse-indicator"></div>
-                <h1>CÓRTEX <span>IA</span></h1>
+    <div class="app-wrapper">
+        <!-- ── HEADER RESPONSIVO ── -->
+        <header class="app-header glass-card">
+            <div class="header-left">
+                <div class="brand-logo">
+                    <div class="pulse-beacon" id="beacon-indicator"></div>
+                    <div class="brand-text">
+                        <h1>CÓRTEX <span>IA</span></h1>
+                        <span class="brand-sub">QUANT AUTONOMOUS ENGINE</span>
+                    </div>
+                </div>
             </div>
-            <div class="status-badges">
-                <span class="badge online">ONLINE</span>
-                <span class="badge mode">SIMULATION MODE</span>
-                <div class="production-balance" style="margin-left: 15px; font-size: 0.9em; color: #a0aec0; border-left: 1px solid #4a5568; padding-left: 15px;">
-                    Prod: <strong id="prod-balance" style="color: #48bb78;">R$ --,--</strong>
+
+            <div class="header-right">
+                <div class="status-group">
+                    <div class="status-pill market-pill" id="badge-market">
+                        <span class="dot"></span>
+                        <span class="label" id="market-status-text">B3: CARREGANDO...</span>
+                    </div>
+                    <div class="status-pill mode-pill" id="badge-mode">
+                        <span class="mode-icon">⚡</span>
+                        <span class="label">SIMULAÇÃO</span>
+                    </div>
+                    <div class="status-pill prod-pill" id="badge-prod">
+                        <span class="label-tiny">CONTA REAL</span>
+                        <span class="val" id="prod-balance">R$ --,--</span>
+                    </div>
                 </div>
             </div>
         </header>
 
-        <main class="grid-layout">
-            <section class="panel glass-panel summary-panel">
-                <h2>Patrimônio</h2>
-                <div class="metrics">
-                    <div class="metric">
-                        <span class="label">Total (R$)</span>
-                        <span class="value" id="val-equity">R$ 0,00</span>
-                    </div>
-                    <div class="metric">
-                        <span class="label">Caixa Livre (R$)</span>
-                        <span class="value" id="val-balance">R$ 0,00</span>
+        <!-- ── NAVEGAÇÃO DE ABAS PARA MOBILE / TABLET ── -->
+        <nav class="mobile-nav-tabs glass-card" id="mobileTabs">
+            <button class="nav-tab active" data-tab="tab-overview">
+                <span class="tab-icon">📊</span>
+                <span class="tab-text">Visão Geral</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-positions">
+                <span class="tab-icon">💼</span>
+                <span class="tab-text">Carteira (<span id="tab-pos-count">0</span>)</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-brain">
+                <span class="tab-icon">🧠</span>
+                <span class="tab-text">Cérebro IA</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-terminal">
+                <span class="tab-icon">💻</span>
+                <span class="tab-text">Terminal</span>
+            </button>
+            <button class="nav-tab" data-tab="tab-news">
+                <span class="tab-icon">📰</span>
+                <span class="tab-text">Notícias</span>
+            </button>
+        </nav>
+
+        <!-- ── CARDS DE RESUMO KPI (FLUID GRID) ── -->
+        <section class="kpi-grid">
+            <div class="kpi-card glass-card">
+                <div class="kpi-icon-wrap icon-equity">💰</div>
+                <div class="kpi-info">
+                    <span class="kpi-label">Patrimônio Total</span>
+                    <span class="kpi-value highlight-equity" id="val-equity">R$ 0,00</span>
+                    <div class="kpi-sub">
+                        <span>P&L Total:</span>
+                        <strong id="val-pnl-total" class="positive">R$ +0,00 (+0,00%)</strong>
                     </div>
                 </div>
-            </section>
+            </div>
 
-            <section class="panel glass-panel chart-panel">
-                <h2>Alocação da Carteira</h2>
-                <div style="position: relative; height: 250px; width: 100%; display: flex; justify-content: center; align-items: center;">
-                    <canvas id="allocationChart"></canvas>
+            <div class="kpi-card glass-card">
+                <div class="kpi-icon-wrap icon-balance">🏦</div>
+                <div class="kpi-info">
+                    <span class="kpi-label">Saldo em Caixa Livre</span>
+                    <span class="kpi-value" id="val-balance">R$ 0,00</span>
+                    <div class="kpi-sub">
+                        <span>Alocação:</span>
+                        <strong id="val-alloc-pct">0,0% em Ações</strong>
+                    </div>
                 </div>
-            </section>
+            </div>
 
-            <section class="panel glass-panel positions-panel">
-                <h2>Posições Abertas</h2>
-                <div class="table-container">
-                    <table id="positions-table">
+            <div class="kpi-card glass-card">
+                <div class="kpi-icon-wrap icon-positions">📈</div>
+                <div class="kpi-info">
+                    <span class="kpi-label">Posições em Custódia</span>
+                    <span class="kpi-value" id="val-positions-count">0 ativos</span>
+                    <div class="kpi-sub">
+                        <span>Universo Monitorado:</span>
+                        <strong id="val-watchlist-count">101 Tickers B3</strong>
+                    </div>
+                </div>
+            </div>
+
+            <div class="kpi-card glass-card">
+                <div class="kpi-icon-wrap icon-heartbeat">🛡️</div>
+                <div class="kpi-info">
+                    <span class="kpi-label">Gestão de Risco</span>
+                    <span class="kpi-value risk-status-safe" id="val-risk-status">ATIVO</span>
+                    <div class="kpi-sub">
+                        <span>Trailing Stop:</span>
+                        <strong>Dinâmico (2,0%)</strong>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── CONTEÚDO PRINCIPAL (DESKTOP GRID / MOBILE TABS) ── -->
+        <main class="dashboard-main-grid">
+
+            <!-- ── SEÇÃO 1: CARTEIRA & POSIÇÕES ABERTAS ── -->
+            <section class="content-panel glass-card tab-content active" id="tab-positions">
+                <div class="panel-header">
+                    <div class="header-title">
+                        <h2>💼 Carteira em Custódia</h2>
+                        <span class="badge-count" id="badge-positions-total">0</span>
+                    </div>
+                    <div class="header-actions">
+                        <div class="search-box">
+                            <span class="search-icon">🔍</span>
+                            <input type="text" id="posSearch" placeholder="Filtrar ticker..." autocomplete="off">
+                        </div>
+                        <div class="view-toggle" id="posViewToggle">
+                            <button class="toggle-btn active" id="btnTableView" title="Visualização em Tabela">📑</button>
+                            <button class="toggle-btn" id="btnCardsView" title="Visualização em Cards">🎴</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabela para Desktop / Tablets -->
+                <div class="table-responsive-container" id="positionsTableWrap">
+                    <table class="data-table" id="positions-table">
                         <thead>
                             <tr>
                                 <th>Ativo</th>
                                 <th>Qtd</th>
-                                <th>Preço Entrada</th>
-                                <th>Preço Atual</th>
+                                <th>Preço Médio</th>
+                                <th>Cotação Atual</th>
                                 <th>Stop Loss</th>
-                                <th>P&L</th>
+                                <th>P&L (R$)</th>
+                                <th>Retorno</th>
+                                <th>Status</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="positions-tbody">
                             <!-- Injetado via JS -->
                         </tbody>
                     </table>
                 </div>
-            </section>
 
-            <section class="panel glass-panel decisions-panel">
-                <h2>Últimas Decisões do Cérebro</h2>
-                <div class="timeline" id="decisions-timeline">
+                <!-- Cards para Mobile -->
+                <div class="positions-cards-container" id="positionsCardsWrap">
                     <!-- Injetado via JS -->
                 </div>
             </section>
 
-            <section class="panel glass-panel logs-panel">
-                <h2>Terminal (Tempo Real)</h2>
-                <div class="terminal" id="log-terminal">
-                    <!-- Injetado via WebSocket -->
+            <!-- ── SEÇÃO 2: ALOCAÇÃO DA CARTEIRA ── -->
+            <section class="content-panel glass-card tab-content active" id="tab-overview">
+                <div class="panel-header">
+                    <div class="header-title">
+                        <h2>📊 Alocação de Ativos</h2>
+                    </div>
+                    <span class="badge-tag">TEMPO REAL</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="allocationChart"></canvas>
+                </div>
+                <div class="allocation-legend-grid" id="chartLegendCustom">
+                    <!-- Legenda Customizada -->
+                </div>
+            </section>
+
+            <!-- ── SEÇÃO 3: CÉREBRO IA & DECISÕES RECENTES ── -->
+            <section class="content-panel glass-card tab-content" id="tab-brain">
+                <div class="panel-header">
+                    <div class="header-title">
+                        <h2>🧠 Pensamentos e Decisões do Cérebro</h2>
+                    </div>
+                    <div class="filter-pills" id="decisionFilterPills">
+                        <button class="filter-pill active" data-filter="ALL">Todas</button>
+                        <button class="filter-pill" data-filter="BUY">Compras</button>
+                        <button class="filter-pill" data-filter="HOLD">Mantidas</button>
+                        <button class="filter-pill" data-filter="SELL">Vendas/Stop</button>
+                    </div>
+                </div>
+                <div class="decisions-timeline" id="decisions-timeline">
+                    <!-- Injetado via JS -->
+                </div>
+            </section>
+
+            <!-- ── SEÇÃO 4: NOTÍCIAS RECENTES B3 ── -->
+            <section class="content-panel glass-card tab-content" id="tab-news">
+                <div class="panel-header">
+                    <div class="header-title">
+                        <h2>📰 Radar de Notícias & Mercado</h2>
+                    </div>
+                    <button class="btn-refresh-news" id="btnRefreshNews" title="Atualizar Notícias">🔄</button>
+                </div>
+                <div class="news-feed-container" id="newsFeedList">
+                    <div class="loading-state">Carregando notícias em tempo real...</div>
+                </div>
+            </section>
+
+            <!-- ── SEÇÃO 5: TERMINAL & LOGS EM TEMPO REAL ── -->
+            <section class="content-panel glass-card logs-wide-panel tab-content" id="tab-terminal">
+                <div class="panel-header">
+                    <div class="header-title">
+                        <h2>💻 Terminal de Execução (Logs ao Vivo)</h2>
+                        <span class="status-dot-pulse" id="wsStatusDot" title="WebSocket Conectado"></span>
+                    </div>
+                    <div class="terminal-controls">
+                        <input type="text" id="terminalFilter" placeholder="Filtrar logs..." class="term-search">
+                        <button class="term-btn" id="btnPauseLogs" title="Pausar Rolagem">⏸️ Pausar</button>
+                        <button class="term-btn" id="btnClearLogs" title="Limpar Tela">🗑️ Limpar</button>
+                    </div>
+                </div>
+                <div class="terminal-screen" id="log-terminal">
+                    <!-- Logs via WebSocket -->
                 </div>
             </section>
         </main>
+
+        <!-- ── FOOTER RESPONSIVO ── -->
+        <footer class="app-footer glass-card">
+            <div class="footer-left">
+                <span>Córtex IA v2.5 — Autonomous Trading System</span>
+                <span class="sep">•</span>
+                <span>Servidor: <strong id="val-server-name">SRV-AUTOMACAO (VPS)</strong></span>
+            </div>
+            <div class="footer-right">
+                <span id="val-last-update">Última atualização: --:--:--</span>
+            </div>
+        </footer>
     </div>
-    
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>

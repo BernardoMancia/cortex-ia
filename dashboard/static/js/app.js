@@ -1,106 +1,384 @@
-let allocationChart = null;
+/**
+ * CÓRTEX IA — Advanced Responsive Dashboard Controller
+ * Multi-device Adaptive • Real-Time WebSockets • High-DPI Charting
+ */
 
+// ── State Management ────────────────────────────────────────────────────────
+let state = {
+    equity: 0,
+    balance: 0,
+    positions: [],
+    recentDecisions: [],
+    news: [],
+    marketStatus: 'DESCONHECIDO',
+    watchlistCount: 101,
+    activeTab: 'tab-overview',
+    activeFilter: 'ALL',
+    searchTerm: '',
+    posViewMode: 'table', // 'table' | 'cards'
+    isPausedLogs: false,
+};
+
+let allocationChart = null;
+let logWs = null;
+
+// ── Formatters ──────────────────────────────────────────────────────────────
 function formatBRL(value) {
+    if (value === undefined || value === null || isNaN(value)) return 'R$ 0,00';
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
 }
 
-function formatDate(dateString) {
-    const date = new Date(dateString);
-    return date.toLocaleString('pt-BR');
+function formatPercent(value) {
+    if (value === undefined || value === null || isNaN(value)) return '0,00%';
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${value.toFixed(2).replace('.', ',')}%`;
 }
 
-async function fetchStatus() {
+function formatDate(dateString) {
+    if (!dateString) return '';
     try {
-        const response = await fetch('/api/status');
-        const data = await response.json();
-        
-        // Atualizar métricas
-        document.getElementById('val-equity').innerText = formatBRL(data.equity);
-        document.getElementById('val-balance').innerText = formatBRL(data.balance);
-        
-        // Fetch production balance
-        fetch('/api/production_balance')
-            .then(res => res.json())
-            .then(prodData => {
-                const prodEl = document.getElementById('prod-balance');
-                if (prodData.status === 'ok' && prodEl) {
-                    prodEl.innerText = formatBRL(prodData.balance);
-                } else if (prodEl) {
-                    prodEl.innerText = 'R$ --,-- (Offline)';
-                }
-            })
-            .catch(() => {});
-        
-        
-        // Atualizar tabela de posições
-        const tbody = document.querySelector('#positions-table tbody');
-        tbody.innerHTML = '';
-        
-        if (data.positions && data.positions.length > 0) {
-            data.positions.forEach(pos => {
-                const currentPrice = pos.current_price || pos.entry_price;
-                const pnl = (currentPrice - pos.entry_price) * pos.quantity;
-                const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-                
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><strong>${pos.ticker}</strong></td>
-                    <td>${pos.quantity}</td>
-                    <td>${formatBRL(pos.entry_price)}</td>
-                    <td>${formatBRL(currentPrice)}</td>
-                    <td>${formatBRL(pos.stop_loss)}</td>
-                    <td class="${pnlClass}">${formatBRL(pnl)}</td>
-                `;
-                tbody.appendChild(tr);
-            });
-        } else {
-            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary);">Nenhuma posição aberta</td></tr>';
-        }
-        
-        // Atualizar timeline de decisões
-        const timeline = document.getElementById('decisions-timeline');
-        timeline.innerHTML = '';
-        
-        if (data.recent_decisions && data.recent_decisions.length > 0) {
-            data.recent_decisions.forEach(dec => {
-                const div = document.createElement('div');
-                div.className = `decision-card ${dec.action}`;
-                div.innerHTML = `
-                    <div class="decision-header">
-                        <span class="decision-ticker">${dec.ticker}</span>
-                        <span class="decision-action action-${dec.action}">${dec.action}</span>
-                    </div>
-                    <div class="decision-reasoning">${dec.reasoning}</div>
-                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 5px; text-align: right;">${formatDate(dec.timestamp)}</div>
-                `;
-                timeline.appendChild(div);
-            });
-        } else {
-            timeline.innerHTML = '<div style="text-align: center; color: var(--text-secondary);">Aguardando decisões...</div>';
-        }
-        
-        updateChart(data);
-        
-    } catch (error) {
-        console.error('Erro ao buscar status:', error);
+        const date = new Date(dateString);
+        return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + 
+               ' (' + date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ')';
+    } catch (e) {
+        return dateString;
     }
 }
 
-function updateChart(data) {
+// ── Mobile / Tablet Tab Switcher ────────────────────────────────────────────
+function setupTabs() {
+    const tabs = document.querySelectorAll('.nav-tab');
+    const contents = document.querySelectorAll('.tab-content');
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+            state.activeTab = target;
+
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            if (window.innerWidth < 1024) {
+                contents.forEach(content => {
+                    if (content.id === target) {
+                        content.classList.add('active');
+                    } else {
+                        content.classList.remove('active');
+                    }
+                });
+            }
+        });
+    });
+
+    // Auto-detect resize to handle grid vs tab content
+    window.addEventListener('resize', () => {
+        if (window.innerWidth >= 1024) {
+            contents.forEach(c => c.classList.add('active'));
+        } else {
+            contents.forEach(c => {
+                if (c.id === state.activeTab) c.classList.add('active');
+                else c.classList.remove('active');
+            });
+        }
+        if (allocationChart) {
+            allocationChart.resize();
+        }
+    });
+}
+
+// ── View Toggle (Table vs Cards) ────────────────────────────────────────────
+function setupViewToggle() {
+    const btnTable = document.getElementById('btnTableView');
+    const btnCards = document.getElementById('btnCardsView');
+    const tableWrap = document.getElementById('positionsTableWrap');
+    const cardsWrap = document.getElementById('positionsCardsWrap');
+
+    function setView(mode) {
+        state.posViewMode = mode;
+        if (mode === 'table') {
+            btnTable.classList.add('active');
+            btnCards.classList.remove('active');
+            tableWrap.classList.remove('hidden-view');
+            cardsWrap.classList.remove('active-view');
+        } else {
+            btnCards.classList.add('active');
+            btnTable.classList.remove('active');
+            tableWrap.classList.add('hidden-view');
+            cardsWrap.classList.add('active-view');
+        }
+    }
+
+    if (btnTable && btnCards) {
+        btnTable.addEventListener('click', () => setView('table'));
+        btnCards.addEventListener('click', () => setView('cards'));
+    }
+
+    // Default to cards on small screens
+    if (window.innerWidth < 640) {
+        setView('cards');
+    }
+}
+
+// ── Positions Search Filter ─────────────────────────────────────────────────
+function setupSearch() {
+    const searchInput = document.getElementById('posSearch');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            state.searchTerm = e.target.value.trim().toUpperCase();
+            renderPositions();
+        });
+    }
+}
+
+// ── Decision Filters ────────────────────────────────────────────────────────
+function setupDecisionFilters() {
+    const pills = document.querySelectorAll('.filter-pill');
+    pills.forEach(pill => {
+        pill.addEventListener('click', () => {
+            pills.forEach(p => p.classList.remove('active'));
+            pill.classList.add('active');
+            state.activeFilter = pill.dataset.filter;
+            renderDecisions();
+        });
+    });
+}
+
+// ── Data Fetching & Sync ────────────────────────────────────────────────────
+async function fetchStatus() {
+    try {
+        const response = await fetch('/api/status');
+        if (!response.ok) return;
+        const data = await response.json();
+
+        state.equity = data.equity || 0;
+        state.balance = data.balance || 0;
+        state.positions = data.positions || [];
+        state.recentDecisions = data.recent_decisions || [];
+        state.marketStatus = data.market_status || 'DESCONHECIDO';
+
+        // 1. Atualizar KPIs
+        renderKPIs(data);
+
+        // 2. Atualizar Status Badges
+        renderMarketStatus(data.market_status);
+
+        // 3. Atualizar Posições (Tabela e Cards)
+        renderPositions();
+
+        // 4. Atualizar Gráfico de Alocação
+        renderChart(data);
+
+        // 5. Atualizar Decisões da IA
+        renderDecisions();
+
+        // Atualizar timestamp no footer
+        const now = new Date();
+        document.getElementById('val-last-update').innerText = `Última atualização: ${now.toLocaleTimeString('pt-BR')}`;
+
+    } catch (err) {
+        console.warn('Erro ao atualizar status do Córtex:', err);
+    }
+}
+
+function fetchProductionBalance() {
+    fetch('/api/production_balance')
+        .then(res => res.json())
+        .then(prodData => {
+            const prodEl = document.getElementById('prod-balance');
+            if (prodData.status === 'ok' && prodEl) {
+                prodEl.innerText = formatBRL(prodData.balance);
+                prodEl.style.color = 'var(--emerald-green)';
+            } else if (prodEl) {
+                prodEl.innerText = 'R$ 0,00 (Off)';
+                prodEl.style.color = 'var(--text-muted)';
+            }
+        })
+        .catch(() => {});
+}
+
+async function fetchNews() {
+    const feed = document.getElementById('newsFeedList');
+    try {
+        const res = await fetch('/api/news?limit=15');
+        if (!res.ok) return;
+        const data = await res.json();
+        state.news = data.news || [];
+        renderNews();
+    } catch (err) {
+        if (feed) feed.innerHTML = '<div class="loading-state">Nenhuma notícia recente disponível no momento.</div>';
+    }
+}
+
+// ── Renderers ───────────────────────────────────────────────────────────────
+function renderKPIs(data) {
+    const elEquity = document.getElementById('val-equity');
+    const elBalance = document.getElementById('val-balance');
+    const elPnlTotal = document.getElementById('val-pnl-total');
+    const elAllocPct = document.getElementById('val-alloc-pct');
+    const elPosCount = document.getElementById('val-positions-count');
+    const tabPosCount = document.getElementById('tab-pos-count');
+    const badgePosTotal = document.getElementById('badge-positions-total');
+
+    if (elEquity) elEquity.innerText = formatBRL(state.equity);
+    if (elBalance) elBalance.innerText = formatBRL(state.balance);
+
+    // Calcular PnL total das posições
+    let totalPnl = 0;
+    let totalCost = 0;
+
+    state.positions.forEach(p => {
+        const curr = p.current_price || p.entry_price || 0;
+        const entry = p.entry_price || 0;
+        const qty = p.quantity || 0;
+        totalPnl += (curr - entry) * qty;
+        totalCost += entry * qty;
+    });
+
+    const pnlPct = totalCost > 0 ? (totalPnl / 100000.0) * 100 : 0;
+    if (elPnlTotal) {
+        const sign = totalPnl >= 0 ? '+' : '';
+        elPnlTotal.innerText = `${sign}${formatBRL(totalPnl)} (${sign}${pnlPct.toFixed(2)}%)`;
+        elPnlTotal.className = totalPnl >= 0 ? 'positive' : 'negative';
+    }
+
+    // Alocação
+    const allocPct = state.equity > 0 ? ((state.equity - state.balance) / state.equity) * 100 : 0;
+    if (elAllocPct) {
+        elAllocPct.innerText = `${allocPct.toFixed(1)}% em Ações`;
+    }
+
+    // Quantidade de posições
+    const posLen = state.positions.length;
+    if (elPosCount) elPosCount.innerText = `${posLen} ativos`;
+    if (tabPosCount) tabPosCount.innerText = posLen;
+    if (badgePosTotal) badgePosTotal.innerText = posLen;
+}
+
+function renderMarketStatus(status) {
+    const badge = document.getElementById('badge-market');
+    const text = document.getElementById('market-status-text');
+    const isOpen = status === 'ABERTO';
+
+    if (badge && text) {
+        text.innerText = isOpen ? 'B3: MERCADO ABERTO' : 'B3: MERCADO FECHADO';
+        if (isOpen) {
+            badge.className = 'status-pill market-pill';
+        } else {
+            badge.className = 'status-pill market-pill closed';
+        }
+    }
+}
+
+function renderPositions() {
+    const tbody = document.getElementById('positions-tbody');
+    const cardsWrap = document.getElementById('positionsCardsWrap');
+    if (!tbody || !cardsWrap) return;
+
+    tbody.innerHTML = '';
+    cardsWrap.innerHTML = '';
+
+    const filtered = state.positions.filter(p => {
+        if (!state.searchTerm) return true;
+        return p.ticker.toUpperCase().includes(state.searchTerm);
+    });
+
+    if (filtered.length === 0) {
+        const emptyMsg = state.searchTerm ? 
+            '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Nenhum ativo encontrado para o filtro.</td></tr>' :
+            '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Nenhuma posição aberta no momento.</td></tr>';
+        tbody.innerHTML = emptyMsg;
+        cardsWrap.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 20px;">${state.searchTerm ? 'Nenhum ativo encontrado.' : 'Nenhuma posição aberta.'}</div>`;
+        return;
+    }
+
+    filtered.forEach(pos => {
+        const curr = pos.current_price || pos.entry_price || 0;
+        const entry = pos.entry_price || 0;
+        const qty = pos.quantity || 0;
+        const sl = pos.stop_loss || 0;
+        const pnl = (curr - entry) * qty;
+        const pnlPct = entry > 0 ? ((curr - entry) / entry) * 100 : 0;
+        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+
+        // Detectar se o trailing stop já subiu acima da entrada
+        const isTrailing = sl > (entry * 0.92);
+        const statusBadge = isTrailing ? 
+            '<span class="status-badge-inline trailing">🎯 TRAILING STOP</span>' : 
+            '<span class="status-badge-inline monitoring">🛡️ PROTEGIDO</span>';
+
+        // 1. Linha da Tabela (Desktop)
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>
+                <div class="ticker-badge">
+                    <span>${pos.ticker}</span>
+                </div>
+            </td>
+            <td>${qty}</td>
+            <td>${formatBRL(entry)}</td>
+            <td><strong>${formatBRL(curr)}</strong></td>
+            <td>${formatBRL(sl)}</td>
+            <td class="${pnlClass}">${formatBRL(pnl)}</td>
+            <td class="${pnlClass}">${formatPercent(pnlPct)}</td>
+            <td>${statusBadge}</td>
+        `;
+        tbody.appendChild(tr);
+
+        // 2. Card (Mobile)
+        const card = document.createElement('div');
+        card.className = 'pos-card';
+        card.innerHTML = `
+            <div class="pos-card-header">
+                <span class="pos-card-ticker">${pos.ticker}</span>
+                ${statusBadge}
+            </div>
+            <div class="pos-card-grid">
+                <div class="pos-card-row">
+                    <span class="lbl">Qtd</span>
+                    <span class="val">${qty} ações</span>
+                </div>
+                <div class="pos-card-row">
+                    <span class="lbl">Preço Entrada</span>
+                    <span class="val">${formatBRL(entry)}</span>
+                </div>
+                <div class="pos-card-row">
+                    <span class="lbl">Cotação Atual</span>
+                    <span class="val" style="color: var(--cyan-accent);">${formatBRL(curr)}</span>
+                </div>
+                <div class="pos-card-row">
+                    <span class="lbl">Stop-Loss</span>
+                    <span class="val">${formatBRL(sl)}</span>
+                </div>
+                <div class="pos-card-row">
+                    <span class="lbl">Lucro/Prejuízo</span>
+                    <span class="val ${pnlClass}">${formatBRL(pnl)}</span>
+                </div>
+                <div class="pos-card-row">
+                    <span class="lbl">Retorno</span>
+                    <span class="val ${pnlClass}">${formatPercent(pnlPct)}</span>
+                </div>
+            </div>
+        `;
+        cardsWrap.appendChild(card);
+    });
+}
+
+function renderChart(data) {
     const ctx = document.getElementById('allocationChart');
+    const legendContainer = document.getElementById('chartLegendCustom');
     if (!ctx) return;
 
     const labels = ['Caixa Livre'];
-    const values = [data.balance];
-    const colors = ['#2d3748'];
+    const values = [data.balance || 0];
+    const colors = ['#223049'];
 
-    if (data.positions) {
-        data.positions.forEach((pos, index) => {
+    if (data.positions && data.positions.length > 0) {
+        data.positions.forEach((pos, idx) => {
+            const val = (pos.current_price || pos.entry_price || 0) * (pos.quantity || 0);
             labels.push(pos.ticker);
-            values.push((pos.current_price || pos.entry_price) * pos.quantity);
-            // Generate some colors
-            const hue = (index * 137.508) % 360; 
-            colors.push(`hsl(${hue}, 70%, 50%)`);
+            values.push(val);
+            const hue = (idx * 137.508) % 360;
+            colors.push(`hsl(${hue}, 75%, 55%)`);
         });
     }
 
@@ -117,21 +395,30 @@ function updateChart(data) {
                 datasets: [{
                     data: values,
                     backgroundColor: colors,
-                    borderWidth: 0,
-                    hoverOffset: 4
+                    borderWidth: 2,
+                    borderColor: '#0b0f19',
+                    hoverOffset: 6,
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                cutout: '72%',
                 plugins: {
-                    legend: {
-                        position: 'right',
-                        labels: {
-                            color: '#a0aec0',
-                            font: {
-                                family: 'Inter',
-                                size: 12
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(11, 15, 25, 0.95)',
+                        titleFont: { family: 'Plus Jakarta Sans', size: 13, weight: 'bold' },
+                        bodyFont: { family: 'JetBrains Mono', size: 12 },
+                        padding: 10,
+                        borderColor: 'rgba(99, 102, 241, 0.3)',
+                        borderWidth: 1,
+                        callbacks: {
+                            label: function(context) {
+                                const val = context.parsed || 0;
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+                                return ` ${formatBRL(val)} (${pct}%)`;
                             }
                         }
                     }
@@ -139,56 +426,194 @@ function updateChart(data) {
             }
         });
     }
+
+    // Renderizar Legenda Customizada em Chips
+    if (legendContainer) {
+        legendContainer.innerHTML = '';
+        const total = values.reduce((a, b) => a + b, 0);
+        labels.forEach((label, i) => {
+            const val = values[i];
+            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+            const chip = document.createElement('div');
+            chip.className = 'legend-chip';
+            chip.innerHTML = `
+                <span class="legend-dot" style="background-color: ${colors[i]};"></span>
+                <span>${label}: <strong>${pct}%</strong></span>
+            `;
+            legendContainer.appendChild(chip);
+        });
+    }
 }
 
-// Configurar WebSocket para logs
+function renderDecisions() {
+    const container = document.getElementById('decisions-timeline');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const filter = state.activeFilter;
+    const list = state.recentDecisions.filter(d => {
+        if (filter === 'ALL') return true;
+        if (filter === 'BUY') return d.action === 'COMPRA' || d.action === 'BUY';
+        if (filter === 'HOLD') return d.action === 'AGUARDAR' || d.action === 'HOLD';
+        if (filter === 'SELL') return d.action === 'VENDA' || d.action === 'SELL' || d.action === 'EMERGENCY_SELL';
+        return true;
+    });
+
+    if (list.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 30px;">Aguardando novas deliberações do Cérebro...</div>';
+        return;
+    }
+
+    list.forEach(dec => {
+        const actionNorm = (dec.action === 'COMPRA' || dec.action === 'BUY') ? 'BUY' :
+                           (dec.action === 'AGUARDAR' || dec.action === 'HOLD') ? 'HOLD' : 'SELL';
+
+        const actionText = (dec.action === 'COMPRA' || dec.action === 'BUY') ? 'COMPRA' :
+                           (dec.action === 'AGUARDAR' || dec.action === 'HOLD') ? 'AGUARDAR / MANTER' : 'VENDA / STOP';
+
+        const card = document.createElement('div');
+        card.className = `decision-card ${actionNorm}`;
+        card.innerHTML = `
+            <div class="decision-header">
+                <span class="decision-ticker">${dec.ticker}</span>
+                <span class="action-badge action-${actionNorm}">${actionText}</span>
+            </div>
+            <div class="decision-reasoning">${dec.reasoning || 'Avaliação técnica e de sentimento em andamento.'}</div>
+            <div class="decision-time">${formatDate(dec.timestamp)}</div>
+        `;
+        container.appendChild(card);
+    });
+}
+
+function renderNews() {
+    const feed = document.getElementById('newsFeedList');
+    if (!feed) return;
+    feed.innerHTML = '';
+
+    if (!state.news || state.news.length === 0) {
+        feed.innerHTML = '<div class="loading-state">Nenhuma notícia recente disponível no momento.</div>';
+        return;
+    }
+
+    state.news.forEach(item => {
+        const a = document.createElement('a');
+        a.className = 'news-item';
+        a.href = item.url || '#';
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.innerHTML = `
+            <div class="news-title">${item.title}</div>
+            <div class="news-meta">
+                <span class="news-source">${item.source || 'B3'}</span>
+                <span>${formatDate(item.published_at || item.scraped_at)}</span>
+            </div>
+        `;
+        feed.appendChild(a);
+    });
+}
+
+// ── WebSocket Log Terminal ──────────────────────────────────────────────────
 function setupWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/logs`);
+    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
     const terminal = document.getElementById('log-terminal');
-    
-    ws.onmessage = function(event) {
-        const line = event.data;
-        const div = document.createElement('div');
-        
-        // Sanitize: escape HTML entities from external data
-        function escapeHtml(str) {
-            var p = document.createElement('p');
-            p.appendChild(document.createTextNode(str));
-            return p.innerHTML;
+    const wsDot = document.getElementById('wsStatusDot');
+    const btnPause = document.getElementById('btnPauseLogs');
+    const btnClear = document.getElementById('btnClearLogs');
+    const termSearch = document.getElementById('terminalFilter');
+
+    if (btnPause) {
+        btnPause.addEventListener('click', () => {
+            state.isPausedLogs = !state.isPausedLogs;
+            btnPause.innerText = state.isPausedLogs ? '▶️ Retomar' : '⏸️ Pausar';
+            btnPause.style.background = state.isPausedLogs ? 'rgba(245, 158, 11, 0.2)' : '';
+        });
+    }
+
+    if (btnClear) {
+        btnClear.addEventListener('click', () => {
+            if (terminal) terminal.innerHTML = '';
+        });
+    }
+
+    function connect() {
+        try {
+            logWs = new WebSocket(wsUrl);
+
+            logWs.onopen = () => {
+                if (wsDot) wsDot.className = 'status-dot-pulse';
+            };
+
+            logWs.onmessage = (event) => {
+                if (state.isPausedLogs || !terminal) return;
+                const raw = event.data;
+
+                const filterVal = termSearch ? termSearch.value.trim().toUpperCase() : '';
+                if (filterVal && !raw.toUpperCase().includes(filterVal)) return;
+
+                function escapeHtml(str) {
+                    const p = document.createElement('p');
+                    p.appendChild(document.createTextNode(str));
+                    return p.innerHTML;
+                }
+
+                let safeLine = escapeHtml(raw);
+
+                // Syntax highlighting
+                safeLine = safeLine.replace(/\[(INFO)\]/g, '<span class="term-info">[$1]</span>');
+                safeLine = safeLine.replace(/\[(WARNING)\]/g, '<span class="term-warning">[$1]</span>');
+                safeLine = safeLine.replace(/\[(ERROR|CRITICAL)\]/g, '<span class="term-error">[$1]</span>');
+                safeLine = safeLine.replace(/\[(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})\]/g, '<span class="term-time">[$1]</span>');
+
+                const div = document.createElement('div');
+                div.className = 'term-line';
+                div.innerHTML = safeLine;
+                terminal.appendChild(div);
+
+                // Keep terminal memory bounded
+                if (terminal.children.length > 400) {
+                    terminal.removeChild(terminal.firstChild);
+                }
+
+                terminal.scrollTop = terminal.scrollHeight;
+            };
+
+            logWs.onclose = () => {
+                if (wsDot) wsDot.className = 'status-dot-pulse offline';
+                setTimeout(connect, 4000);
+            };
+
+            logWs.onerror = () => {
+                if (wsDot) wsDot.className = 'status-dot-pulse offline';
+            };
+        } catch (e) {
+            setTimeout(connect, 5000);
         }
-        
-        let safeLine = escapeHtml(line);
-        
-        // Simple highlighting based on log level (applied to sanitized text)
-        if (safeLine.includes('[INFO]')) {
-            safeLine = safeLine.replace('[INFO]', '<span class="info">[INFO]</span>');
-        } else if (safeLine.includes('[WARNING]')) {
-            safeLine = safeLine.replace('[WARNING]', '<span class="warning">[WARNING]</span>');
-        } else if (safeLine.includes('[ERROR]')) {
-            safeLine = safeLine.replace('[ERROR]', '<span class="error">[ERROR]</span>');
-        }
-        
-        // Highlight timestamp
-        safeLine = safeLine.replace(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/, '<span class="time">[$1]</span>');
-        
-        div.innerHTML = safeLine;
-        terminal.appendChild(div);
-        
-        // Auto-scroll to bottom
-        if (terminal.children.length > 500) {
-            terminal.removeChild(terminal.firstChild);
-        }
-        terminal.scrollTop = terminal.scrollHeight;
-    };
-    
-    ws.onclose = function() {
-        console.log('WebSocket desconectado. Tentando reconectar em 5s...');
-        setTimeout(setupWebSocket, 5000);
-    };
+    }
+
+    connect();
 }
 
-// Iniciar
-setInterval(fetchStatus, 3000); // Atualizar status a cada 3s
-fetchStatus();
-setupWebSocket();
+// ── Initialization ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    setupTabs();
+    setupViewToggle();
+    setupSearch();
+    setupDecisionFilters();
+    setupWebSocket();
+
+    const btnRefreshNews = document.getElementById('btnRefreshNews');
+    if (btnRefreshNews) {
+        btnRefreshNews.addEventListener('click', fetchNews);
+    }
+
+    // Ciclo de atualização
+    fetchStatus();
+    fetchProductionBalance();
+    fetchNews();
+
+    setInterval(fetchStatus, 3000);
+    setInterval(fetchProductionBalance, 10000);
+    setInterval(fetchNews, 60000);
+});
+
