@@ -10,17 +10,13 @@ from analysis.sentiment import SentimentAnalyzer, SentimentResult, NewsItem
 from analysis.decision import DecisionEngine, Decision, Action
 
 __all__ = [
-    # Classes principais
     'TechnicalAnalyzer',
     'SentimentAnalyzer',
     'DecisionEngine',
-    # Dataclasses de resultado
     'TechnicalResult',
     'SentimentResult',
     'Decision',
-    # Enums
     'TrendSignal',
     'Action',
-    # Protocolos
     'NewsItem',
 ]

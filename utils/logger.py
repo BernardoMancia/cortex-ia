@@ -12,26 +12,19 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Final
 
-# ────────────────────────────────────────────────────────────
-# Constantes
-# ────────────────────────────────────────────────────────────
-_MAX_BYTES: Final[int] = 10 * 1024 * 1024  # 10 MB
+_MAX_BYTES: Final[int] = 10 * 1024 * 1024
 _BACKUP_COUNT: Final[int] = 5
 _LOG_FORMAT: Final[str] = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
 _DATE_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
 
-# ────────────────────────────────────────────────────────────
-# Cores ANSI para console (apenas plataformas que suportam)
-# ────────────────────────────────────────────────────────────
 _COLORS: dict[int, str] = {
-    logging.DEBUG: "\033[36m",      # Ciano
-    logging.INFO: "\033[32m",       # Verde
-    logging.WARNING: "\033[33m",    # Amarelo
-    logging.ERROR: "\033[31m",      # Vermelho
-    logging.CRITICAL: "\033[1;31m", # Vermelho negrito
+    logging.DEBUG: "\033[36m",
+    logging.INFO: "\033[32m",
+    logging.WARNING: "\033[33m",
+    logging.ERROR: "\033[31m",
+    logging.CRITICAL: "\033[1;31m",
 }
 _RESET: Final[str] = "\033[0m"
-
 
 def _supports_color() -> bool:
     """
@@ -40,11 +33,9 @@ def _supports_color() -> bool:
     Returns:
         True se o terminal suportar saída colorida.
     """
-    # Força desativação via variável de ambiente
     if os.getenv("NO_COLOR"):
         return False
 
-    # Windows: verifica se é Windows Terminal ou ConEmu
     if sys.platform == "win32":
         return (
             "WT_SESSION" in os.environ
@@ -53,9 +44,7 @@ def _supports_color() -> bool:
             or hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
         )
 
-    # Unix: verifica se é TTY
     return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
-
 
 class _ColorFormatter(logging.Formatter):
     """
@@ -79,10 +68,7 @@ class _ColorFormatter(logging.Formatter):
             return result
         return super().format(record)
 
-
-# Cache de loggers já configurados para evitar handlers duplicados
 _configured_loggers: set[str] = set()
-
 
 def setup_logger(
     name: str,
@@ -105,14 +91,11 @@ def setup_logger(
     Returns:
         Logger configurado e pronto para uso.
     """
-    # Evita reconfigurar o mesmo logger
     if name in _configured_loggers:
         return logging.getLogger(name)
 
-    # Importação tardia para evitar dependência circular
     from config.settings import settings
 
-    # Resolve nível
     if verbose and level is None:
         level = logging.DEBUG
     elif level is None:
@@ -120,7 +103,6 @@ def setup_logger(
     if isinstance(level, str):
         level = getattr(logging, level.upper(), logging.INFO)
 
-    # Resolve diretório
     if log_dir is None:
         log_dir = settings.LOG_DIR
     log_dir = Path(log_dir)
@@ -129,11 +111,8 @@ def setup_logger(
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
-    # Previne propagação para o root logger
     logger.propagate = False
 
-    # ── Handler de arquivo (rotação) ──────────────────────
-    # Usa o nome base do módulo para nomear o arquivo
     safe_name = name.replace(".", "_").replace("/", "_").replace("\\", "_")
     log_file = log_dir / f"{safe_name}.log"
 
@@ -148,14 +127,12 @@ def setup_logger(
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
-    # ── Handler de console ────────────────────────────────
     console_handler = logging.StreamHandler(stream=sys.stderr)
     console_handler.setLevel(level)
     console_formatter = _ColorFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT)
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
-    # ── Handler SQLite (apenas Linux / produção) ──────────
     if sys.platform.startswith('linux'):
         try:
             from utils.log_db_handler import SQLiteLogHandler
@@ -165,12 +142,10 @@ def setup_logger(
             sqlite_handler.setFormatter(sqlite_formatter)
             logger.addHandler(sqlite_handler)
         except Exception:
-            # Falha silenciosa — não impedir o sistema de iniciar
             pass
 
     _configured_loggers.add(name)
     return logger
-
 
 def get_logger(module_name: str) -> logging.Logger:
     """

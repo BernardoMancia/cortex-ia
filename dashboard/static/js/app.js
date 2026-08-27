@@ -1,9 +1,5 @@
-/**
- * CÓRTEX IA — Advanced Responsive Dashboard Controller
- * Multi-device Adaptive • Real-Time WebSockets • High-DPI Charting
- */
 
-// ── State Management ────────────────────────────────────────────────────────
+
 let state = {
     equity: 0,
     balance: 0,
@@ -15,14 +11,13 @@ let state = {
     activeTab: 'tab-overview',
     activeFilter: 'ALL',
     searchTerm: '',
-    posViewMode: 'table', // 'table' | 'cards'
+    posViewMode: 'table',
     isPausedLogs: false,
 };
 
 let allocationChart = null;
 let logWs = null;
 
-// ── Formatters ──────────────────────────────────────────────────────────────
 function formatBRL(value) {
     if (value === undefined || value === null || isNaN(value)) return 'R$ 0,00';
     return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -38,14 +33,13 @@ function formatDate(dateString) {
     if (!dateString) return '';
     try {
         const date = new Date(dateString);
-        return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + 
+        return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
                ' (' + date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ')';
     } catch (e) {
         return dateString;
     }
 }
 
-// ── Mobile / Tablet Tab Switcher ────────────────────────────────────────────
 function setupTabs() {
     const tabs = document.querySelectorAll('.nav-tab');
     const contents = document.querySelectorAll('.tab-content');
@@ -70,7 +64,6 @@ function setupTabs() {
         });
     });
 
-    // Auto-detect resize to handle grid vs tab content
     window.addEventListener('resize', () => {
         if (window.innerWidth >= 1024) {
             contents.forEach(c => c.classList.add('active'));
@@ -86,7 +79,6 @@ function setupTabs() {
     });
 }
 
-// ── View Toggle (Table vs Cards) ────────────────────────────────────────────
 function setupViewToggle() {
     const btnTable = document.getElementById('btnTableView');
     const btnCards = document.getElementById('btnCardsView');
@@ -113,13 +105,11 @@ function setupViewToggle() {
         btnCards.addEventListener('click', () => setView('cards'));
     }
 
-    // Default to cards on small screens
     if (window.innerWidth < 640) {
         setView('cards');
     }
 }
 
-// ── Positions Search Filter ─────────────────────────────────────────────────
 function setupSearch() {
     const searchInput = document.getElementById('posSearch');
     if (searchInput) {
@@ -130,7 +120,6 @@ function setupSearch() {
     }
 }
 
-// ── Decision Filters ────────────────────────────────────────────────────────
 function setupDecisionFilters() {
     const pills = document.querySelectorAll('.filter-pill');
     pills.forEach(pill => {
@@ -143,7 +132,6 @@ function setupDecisionFilters() {
     });
 }
 
-// ── Data Fetching & Sync ────────────────────────────────────────────────────
 async function fetchStatus() {
     try {
         const response = await fetch('/api/status');
@@ -156,22 +144,16 @@ async function fetchStatus() {
         state.recentDecisions = data.recent_decisions || [];
         state.marketStatus = data.market_status || 'DESCONHECIDO';
 
-        // 1. Atualizar KPIs
         renderKPIs(data);
 
-        // 2. Atualizar Status Badges
         renderMarketStatus(data.market_status);
 
-        // 3. Atualizar Posições (Tabela e Cards)
         renderPositions();
 
-        // 4. Atualizar Gráfico de Alocação
         renderChart(data);
 
-        // 5. Atualizar Decisões da IA
         renderDecisions();
 
-        // Atualizar timestamp no footer
         const now = new Date();
         document.getElementById('val-last-update').innerText = `Última atualização: ${now.toLocaleTimeString('pt-BR')}`;
 
@@ -209,7 +191,6 @@ async function fetchNews() {
     }
 }
 
-// ── Renderers ───────────────────────────────────────────────────────────────
 function renderKPIs(data) {
     const elEquity = document.getElementById('val-equity');
     const elBalance = document.getElementById('val-balance');
@@ -222,7 +203,6 @@ function renderKPIs(data) {
     if (elEquity) elEquity.innerText = formatBRL(state.equity);
     if (elBalance) elBalance.innerText = formatBRL(state.balance);
 
-    // Calcular PnL total das posições
     let totalPnl = 0;
     let totalCost = 0;
 
@@ -241,13 +221,11 @@ function renderKPIs(data) {
         elPnlTotal.className = totalPnl >= 0 ? 'positive' : 'negative';
     }
 
-    // Alocação
     const allocPct = state.equity > 0 ? ((state.equity - state.balance) / state.equity) * 100 : 0;
     if (elAllocPct) {
         elAllocPct.innerText = `${allocPct.toFixed(1)}% em Ações`;
     }
 
-    // Quantidade de posições
     const posLen = state.positions.length;
     if (elPosCount) elPosCount.innerText = `${posLen} ativos`;
     if (tabPosCount) tabPosCount.innerText = posLen;
@@ -283,7 +261,7 @@ function renderPositions() {
     });
 
     if (filtered.length === 0) {
-        const emptyMsg = state.searchTerm ? 
+        const emptyMsg = state.searchTerm ?
             '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Nenhum ativo encontrado para o filtro.</td></tr>' :
             '<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">Nenhuma posição aberta no momento.</td></tr>';
         tbody.innerHTML = emptyMsg;
@@ -300,13 +278,11 @@ function renderPositions() {
         const pnlPct = entry > 0 ? ((curr - entry) / entry) * 100 : 0;
         const pnlClass = pnl >= 0 ? 'positive' : 'negative';
 
-        // Detectar se o trailing stop já subiu acima da entrada
         const isTrailing = sl > (entry * 0.92);
-        const statusBadge = isTrailing ? 
-            '<span class="status-badge-inline trailing">🎯 TRAILING STOP</span>' : 
+        const statusBadge = isTrailing ?
+            '<span class="status-badge-inline trailing">🎯 TRAILING STOP</span>' :
             '<span class="status-badge-inline monitoring">🛡️ PROTEGIDO</span>';
 
-        // 1. Linha da Tabela (Desktop)
         const tr = document.createElement('tr');
         tr.innerHTML = `
             <td>
@@ -324,7 +300,6 @@ function renderPositions() {
         `;
         tbody.appendChild(tr);
 
-        // 2. Card (Mobile)
         const card = document.createElement('div');
         card.className = 'pos-card';
         card.innerHTML = `
@@ -427,7 +402,6 @@ function renderChart(data) {
         });
     }
 
-    // Renderizar Legenda Customizada em Chips
     if (legendContainer) {
         legendContainer.innerHTML = '';
         const total = values.reduce((a, b) => a + b, 0);
@@ -512,7 +486,6 @@ function renderNews() {
     });
 }
 
-// ── WebSocket Log Terminal ──────────────────────────────────────────────────
 function setupWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
@@ -559,7 +532,6 @@ function setupWebSocket() {
 
                 let safeLine = escapeHtml(raw);
 
-                // Syntax highlighting
                 safeLine = safeLine.replace(/\[(INFO)\]/g, '<span class="term-info">[$1]</span>');
                 safeLine = safeLine.replace(/\[(WARNING)\]/g, '<span class="term-warning">[$1]</span>');
                 safeLine = safeLine.replace(/\[(ERROR|CRITICAL)\]/g, '<span class="term-error">[$1]</span>');
@@ -570,7 +542,6 @@ function setupWebSocket() {
                 div.innerHTML = safeLine;
                 terminal.appendChild(div);
 
-                // Keep terminal memory bounded
                 if (terminal.children.length > 400) {
                     terminal.removeChild(terminal.firstChild);
                 }
@@ -594,7 +565,6 @@ function setupWebSocket() {
     connect();
 }
 
-// ── Initialization ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     setupTabs();
     setupViewToggle();
@@ -607,7 +577,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btnRefreshNews.addEventListener('click', fetchNews);
     }
 
-    // Ciclo de atualização
     fetchStatus();
     fetchProductionBalance();
     fetchNews();

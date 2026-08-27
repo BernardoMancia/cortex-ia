@@ -1,5 +1,4 @@
 #!/bin/bash
-# Inicia o Córtex IA no Linux/VPS
 
 echo "Iniciando o Dashboard Web (Uvicorn)..."
 source .venv/bin/activate

@@ -14,35 +14,29 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger('cortex.scheduler')
 
-# Timezone BRT via zoneinfo (correto para DST automático)
 BRT_TZ = ZoneInfo('America/Sao_Paulo')
 
-# Horários de mercado da B3
 MARKET_OPEN_TIME = time(10, 0)
-MARKET_CLOSE_SUMMER = time(16, 55)  # Horário de verão americano
-MARKET_CLOSE_WINTER = time(17, 55)  # Horário de inverno americano
+MARKET_CLOSE_SUMMER = time(16, 55)
+MARKET_CLOSE_WINTER = time(17, 55)
 
-# Horário especial para Quarta-Feira de Cinzas (mercado abre às 13:00)
 ASH_WEDNESDAY_OPEN_TIME = time(13, 0)
 
-# Janelas de manutenção do sistema
 MAINTENANCE_WINDOWS: list[time] = [time(6, 0), time(19, 0), time(23, 0)]
 MAINTENANCE_TOLERANCE_MINUTES: int = 5
 
-# Feriados fixos da B3 (dia, mês) — não inclui feriados móveis
 B3_FIXED_HOLIDAYS: list[tuple[int, int]] = [
-    (1, 1),    # Confraternização Universal
-    (21, 4),   # Tiradentes
-    (1, 5),    # Dia do Trabalhador
-    (7, 9),    # Independência do Brasil
-    (12, 10),  # Nossa Senhora Aparecida
-    (2, 11),   # Finados
-    (15, 11),  # Proclamação da República
-    (20, 11),  # Dia da Consciência Negra
-    (25, 12),  # Natal
-    (31, 12),  # Véspera de Ano Novo (fechamento parcial → tratado como fechado)
+    (1, 1),
+    (21, 4),
+    (1, 5),
+    (7, 9),
+    (12, 10),
+    (2, 11),
+    (15, 11),
+    (20, 11),
+    (25, 12),
+    (31, 12),
 ]
-
 
 def _easter(year: int) -> date:
     """
@@ -64,12 +58,11 @@ def _easter(year: int) -> date:
     h = (19 * a + b - d - g + 15) % 30
     i = c // 4
     k = c % 4
-    l = (32 + 2 * e + 2 * i - h - k) % 7  # noqa: E741
+    l = (32 + 2 * e + 2 * i - h - k) % 7
     m = (a + 11 * h + 22 * l) // 451
     month = (h + l - 7 * m + 114) // 31
     day = ((h + l - 7 * m + 114) % 31) + 1
     return date(year, month, day)
-
 
 def _get_movable_holidays(year: int) -> list[date]:
     """
@@ -89,12 +82,11 @@ def _get_movable_holidays(year: int) -> list[date]:
     """
     easter = _easter(year)
     return [
-        easter - timedelta(days=48),  # Carnaval segunda
-        easter - timedelta(days=47),  # Carnaval terça
-        easter - timedelta(days=2),   # Sexta-feira Santa
-        easter + timedelta(days=60),  # Corpus Christi
+        easter - timedelta(days=48),
+        easter - timedelta(days=47),
+        easter - timedelta(days=2),
+        easter + timedelta(days=60),
     ]
-
 
 def _get_ash_wednesday(year: int) -> date:
     """
@@ -110,7 +102,6 @@ def _get_ash_wednesday(year: int) -> date:
         Data da Quarta-Feira de Cinzas.
     """
     return _easter(year) - timedelta(days=46)
-
 
 class MarketScheduler:
     """Agendador de horários de mercado da B3."""
@@ -136,12 +127,10 @@ class MarketScheduler:
         current_time = now.time()
         current_date = now.date()
 
-        # Verificar dia útil
         if not self.is_business_day(current_date):
             logger.debug('Mercado fechado: %s não é dia útil', current_date)
             return False
 
-        # Verificar horário
         open_time = self.get_market_open_time(current_date)
         close_time = self.get_market_close_time()
 
@@ -175,16 +164,13 @@ class MarketScheduler:
         if check_date is None:
             check_date = datetime.now(BRT_TZ).date()
 
-        # Fim de semana: 5 = sábado, 6 = domingo
         if check_date.weekday() >= 5:
             return False
 
-        # Feriados fixos
         day_month = (check_date.day, check_date.month)
         if day_month in B3_FIXED_HOLIDAYS:
             return False
 
-        # Feriados móveis (calculados algoritmicamente)
         movable = _get_movable_holidays(check_date.year)
         if check_date in movable:
             return False
@@ -238,14 +224,11 @@ class MarketScheduler:
         """
         year = check_date.year
 
-        # 2º domingo de março
         march_first = date(year, 3, 1)
-        # Encontrar primeiro domingo de março
         days_to_sunday = (6 - march_first.weekday()) % 7
         first_sunday_march = march_first + timedelta(days=days_to_sunday)
         second_sunday_march = first_sunday_march + timedelta(days=7)
 
-        # 1º domingo de novembro
         november_first = date(year, 11, 1)
         days_to_sunday_nov = (6 - november_first.weekday()) % 7
         first_sunday_november = november_first + timedelta(days=days_to_sunday_nov)
@@ -302,13 +285,11 @@ class MarketScheduler:
         today = now.date()
         open_time = self.get_market_open_time(today)
 
-        # Se hoje é dia útil e ainda não abriu
         if self.is_business_day(today):
             today_open = datetime.combine(today, open_time, tzinfo=BRT_TZ)
             if now < today_open:
                 return today_open - now
 
-        # Encontrar próximo dia útil
         next_day = today + timedelta(days=1)
         safety_counter = 0
         while not self.is_business_day(next_day) and safety_counter < 15:
@@ -351,7 +332,6 @@ class MarketScheduler:
             maint_minutes = maint_time.hour * 60 + maint_time.minute
             diff = abs(current_minutes - maint_minutes)
 
-            # Considerar virada de meia-noite
             diff = min(diff, 1440 - diff)
 
             if diff <= MAINTENANCE_TOLERANCE_MINUTES:

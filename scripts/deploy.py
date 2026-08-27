@@ -19,7 +19,6 @@ ssh.connect(host, port, user, password)
 
 print("Starting upload via SCP...")
 with SCPClient(ssh.get_transport()) as scp:
-    # Upload everything except venv, .git, __pycache__, and DBs
     for item in os.listdir(local_dir):
         if item in ['.git', 'venv', '__pycache__', 'cortex.db', 'simulator_state.json', '.env']:
             continue
@@ -32,7 +31,6 @@ with SCPClient(ssh.get_transport()) as scp:
 
 print("Upload complete!")
 
-# Now setup the systemd service
 print("Setting up systemd service...")
 commands = [
     f"sudo -S cp {remote_dir}/scripts/cortex-ia.service /etc/systemd/system/",
@@ -45,7 +43,6 @@ commands = [
 for cmd in commands:
     print(f"Running: {cmd}")
     stdin, stdout, stderr = ssh.exec_command(cmd)
-    # se precisar de senha pro sudo
     stdin.write(password + '\n')
     stdin.flush()
     print(stdout.read().decode())

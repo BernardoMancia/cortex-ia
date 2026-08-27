@@ -24,7 +24,6 @@ logger = logging.getLogger("cortex.broker.simulator")
 
 BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
 
-
 class SimulatorBroker(BrokerBase):
     """
     Corretora simulada para paper trading.
@@ -53,7 +52,7 @@ class SimulatorBroker(BrokerBase):
         self._connected: bool = False
         self._lock: threading.Lock = threading.Lock()
         self._state_path: Path = state_path or settings.simulator_state_path
-        self._market_data: Any = None  # Inicializado lazy para evitar import circular
+        self._market_data: Any = None
 
         logger.info(
             "SimulatorBroker criado — capital inicial: R$%.2f, state: %s",
@@ -61,20 +60,12 @@ class SimulatorBroker(BrokerBase):
             self._state_path,
         )
 
-    # ══════════════════════════════════════════════════════════════
-    #  Acesso lazy ao MarketData (evita import circular)
-    # ══════════════════════════════════════════════════════════════
-
     def _get_market_data(self) -> Any:
         """Retorna instância de MarketData (lazy import para evitar circular)."""
         if self._market_data is None:
             from data.market_data import MarketData
             self._market_data = MarketData()
         return self._market_data
-
-    # ══════════════════════════════════════════════════════════════
-    #  Helpers de validação
-    # ══════════════════════════════════════════════════════════════
 
     @staticmethod
     def _ensure_fractional_suffix(ticker: str) -> str:
@@ -113,10 +104,6 @@ class SimulatorBroker(BrokerBase):
         ticket = self._next_ticket
         self._next_ticket += 1
         return ticket
-
-    # ══════════════════════════════════════════════════════════════
-    #  Persistência de estado
-    # ══════════════════════════════════════════════════════════════
 
     def _save_state(self) -> None:
         """Persiste o estado atual em arquivo JSON (chamado sob lock)."""
@@ -187,10 +174,6 @@ class SimulatorBroker(BrokerBase):
             self._next_ticket = 1
             return False
 
-    # ══════════════════════════════════════════════════════════════
-    #  Preço de mercado atual
-    # ══════════════════════════════════════════════════════════════
-
     def _get_current_price(self, ticker: str) -> float:
         """
         Obtém preço de mercado atual via MarketData.
@@ -211,10 +194,6 @@ class SimulatorBroker(BrokerBase):
         except Exception as exc:
             logger.warning("Falha ao obter preço de %s: %s", base_ticker, exc)
         return 0.0
-
-    # ══════════════════════════════════════════════════════════════
-    #  Implementação da interface BrokerBase
-    # ══════════════════════════════════════════════════════════════
 
     def connect(self) -> bool:
         """
@@ -270,7 +249,6 @@ class SimulatorBroker(BrokerBase):
                 if current_price > 0:
                     positions_value += current_price * pos_data["quantity"]
                 else:
-                    # Fallback: usa preço de entrada se mercado indisponível
                     positions_value += pos_data["entry_price"] * pos_data["quantity"]
             return round(self._balance + positions_value, 2)
 
@@ -290,7 +268,6 @@ class SimulatorBroker(BrokerBase):
         ticker = self._ensure_fractional_suffix(ticker)
         now = datetime.now(tz=BRT)
 
-        # ── Validação de quantidade ──────────────────────────────
         try:
             self._validate_quantity(quantity)
         except ValueError as exc:
@@ -309,7 +286,6 @@ class SimulatorBroker(BrokerBase):
         total_cost = round(quantity * price, 2)
 
         with self._lock:
-            # ── Validação de capital ─────────────────────────────
             if total_cost > self._balance:
                 msg = (
                     f"Capital insuficiente: R${total_cost:.2f} necessário, "
@@ -327,7 +303,6 @@ class SimulatorBroker(BrokerBase):
                     comment=msg,
                 )
 
-            # ── Verificar se já existe posição no ativo ──────────
             if ticker in self._positions:
                 msg = f"Já existe posição aberta em {ticker}"
                 logger.warning("Compra rejeitada — %s", msg)
@@ -342,7 +317,6 @@ class SimulatorBroker(BrokerBase):
                     comment=msg,
                 )
 
-            # ── Executar compra ──────────────────────────────────
             ticket = self._generate_ticket()
             self._balance -= total_cost
             self._positions[ticker] = {
@@ -393,7 +367,6 @@ class SimulatorBroker(BrokerBase):
         now = datetime.now(tz=BRT)
 
         with self._lock:
-            # ── Verificar posição existente ──────────────────────
             if ticker not in self._positions:
                 msg = f"Nenhuma posição aberta em {ticker}"
                 logger.warning("Venda rejeitada — %s", msg)
@@ -409,7 +382,6 @@ class SimulatorBroker(BrokerBase):
 
             pos_data = self._positions[ticker]
 
-            # ── Validar quantidade ───────────────────────────────
             if quantity > pos_data["quantity"]:
                 msg = (
                     f"Quantidade solicitada ({quantity}) excede posição "
@@ -426,7 +398,6 @@ class SimulatorBroker(BrokerBase):
                     comment=msg,
                 )
 
-            # ── Executar venda ───────────────────────────────────
             ticket = self._generate_ticket()
             total_revenue = round(quantity * price, 2)
             self._balance += total_revenue
@@ -487,7 +458,6 @@ class SimulatorBroker(BrokerBase):
             pos_data = self._positions[ticker]
             quantity = pos_data["quantity"]
 
-        # Buscar preço de mercado (fora do lock para não bloquear I/O)
         market_price = self._get_current_price(ticker)
         if market_price <= 0:
             market_price = pos_data["entry_price"]
@@ -591,10 +561,6 @@ class SimulatorBroker(BrokerBase):
                 new_sl,
             )
             return True
-
-    # ══════════════════════════════════════════════════════════════
-    #  Métodos auxiliares
-    # ══════════════════════════════════════════════════════════════
 
     def reset(self) -> None:
         """Reseta o simulador ao estado inicial (útil para testes)."""

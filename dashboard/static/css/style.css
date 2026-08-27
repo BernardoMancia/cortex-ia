@@ -1,10 +1,7 @@
-/* ==========================================================================
-   CÓRTEX IA — DESIGN SYSTEM & RESPONSIVE STYLESHEET
-   Mobile-First • High-DPI • Multi-Device Adaptable (320px to 4K Ultra-Wide)
-   ========================================================================== */
+
 
 :root {
-    /* Color Palette */
+
     --bg-main: #070a12;
     --bg-surface: #0e1424;
     --card-bg: rgba(16, 24, 44, 0.75);
@@ -12,13 +9,11 @@
     --card-border: rgba(99, 102, 241, 0.15);
     --card-border-glow: rgba(99, 102, 241, 0.35);
 
-    /* Text Colors */
     --text-primary: #f8fafc;
     --text-secondary: #94a3b8;
     --text-muted: #64748b;
     --text-inverse: #0b0f19;
 
-    /* Accents */
     --cyan-accent: #06b6d4;
     --blue-accent: #3b82f6;
     --indigo-accent: #6366f1;
@@ -29,22 +24,18 @@
     --amber-gold: #f59e0b;
     --amber-glow: rgba(245, 158, 11, 0.25);
 
-    /* Spacing & Radii */
     --radius-sm: 8px;
     --radius-md: 12px;
     --radius-lg: 18px;
     --radius-full: 9999px;
 
-    /* Fonts */
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
-    /* Transitions */
     --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
     --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* ── Reset & Base ────────────────────────────────────────────────────────── */
 *, *::before, *::after {
     box-sizing: border-box;
     margin: 0;
@@ -65,7 +56,7 @@ html, body {
 }
 
 body {
-    background-image: 
+    background-image:
         radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.18), transparent 70%),
         radial-gradient(ellipse 60% 40% at 100% 100%, rgba(16, 185, 129, 0.12), transparent 60%),
         radial-gradient(ellipse 50% 30% at 0% 100%, rgba(6, 182, 212, 0.10), transparent 50%);
@@ -81,7 +72,6 @@ body {
     }
 }
 
-/* ── Container ───────────────────────────────────────────────────────────── */
 .app-wrapper {
     max-width: 1680px;
     margin: 0 auto;
@@ -96,7 +86,6 @@ body {
     }
 }
 
-/* ── Glass Card Effect ───────────────────────────────────────────────────── */
 .glass-card {
     background: var(--card-bg);
     backdrop-filter: blur(16px);
@@ -111,7 +100,6 @@ body {
     border-color: var(--card-border-glow);
 }
 
-/* ── Header ──────────────────────────────────────────────────────────────── */
 .app-header {
     display: flex;
     flex-direction: column;
@@ -232,7 +220,6 @@ body {
     color: var(--cyan-accent);
 }
 
-/* ── Mobile Nav Tabs ─────────────────────────────────────────────────────── */
 .mobile-nav-tabs {
     display: flex;
     overflow-x: auto;
@@ -280,11 +267,10 @@ body {
 
 @media (min-width: 1024px) {
     .mobile-nav-tabs {
-        display: none; /* Em desktop, todos os painéis coexistem no grid */
+        display: none;
     }
 }
 
-/* ── KPI Grid ────────────────────────────────────────────────────────────── */
 .kpi-grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -374,7 +360,6 @@ body {
     color: var(--emerald-green);
 }
 
-/* ── Main Dashboard Layout ───────────────────────────────────────────────── */
 .dashboard-main-grid {
     display: flex;
     flex-direction: column;
@@ -414,14 +399,13 @@ body {
         grid-row: 3;
     }
 
-    /* Em desktop todas as abas ficam sempre visíveis */
     .tab-content {
         display: flex !important;
     }
 }
 
 @media (max-width: 1023px) {
-    /* No Mobile / Tablet alternamos o display baseado na aba ativa */
+
     .tab-content {
         display: none;
     }
@@ -437,7 +421,6 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Content Panel Base ──────────────────────────────────────────────────── */
 .content-panel {
     display: flex;
     flex-direction: column;
@@ -503,7 +486,6 @@ body {
     flex-wrap: wrap;
 }
 
-/* ── Search Input ────────────────────────────────────────────────────────── */
 .search-box {
     display: flex;
     align-items: center;
@@ -551,7 +533,6 @@ body {
     background: rgba(255, 255, 255, 0.15);
 }
 
-/* ── Table & Card View Modes ─────────────────────────────────────────────── */
 .table-responsive-container {
     width: 100%;
     overflow-x: auto;
@@ -561,7 +542,7 @@ body {
 .data-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 680px; /* Evita quebra feia no horizontal */
+    min-width: 680px;
 }
 
 .data-table th, .data-table td {
@@ -621,7 +602,6 @@ body {
     border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
-/* ── Mobile Positions Card View ─────────────────────────────────────────── */
 .positions-cards-container {
     display: none;
     flex-direction: column;
@@ -683,7 +663,6 @@ body {
     font-weight: 600;
 }
 
-/* ── Helpers P&L ─────────────────────────────────────────────────────────── */
 .positive {
     color: var(--emerald-green) !important;
 }
@@ -692,7 +671,6 @@ body {
     color: var(--crimson-red) !important;
 }
 
-/* ── Chart Section ───────────────────────────────────────────────────────── */
 .chart-wrapper {
     position: relative;
     width: 100%;
@@ -726,7 +704,6 @@ body {
     border-radius: 50%;
 }
 
-/* ── Timeline de Decisões ────────────────────────────────────────────────── */
 .filter-pills {
     display: flex;
     gap: 6px;
@@ -836,7 +813,6 @@ body {
     text-align: right;
 }
 
-/* ── Radar de Notícias ───────────────────────────────────────────────────── */
 .btn-refresh-news {
     background: transparent;
     border: none;
@@ -900,7 +876,6 @@ body {
     font-weight: 600;
 }
 
-/* ── Terminal / Logs ─────────────────────────────────────────────────────── */
 .terminal-controls {
     display: flex;
     align-items: center;
@@ -969,7 +944,6 @@ body {
 .term-line .term-warning { color: var(--amber-gold); }
 .term-line .term-error { color: var(--crimson-red); font-weight: 700; }
 
-/* ── Footer ──────────────────────────────────────────────────────────────── */
 .app-footer {
     display: flex;
     flex-direction: column;
@@ -996,7 +970,6 @@ body {
     color: var(--card-border);
 }
 
-/* ── Custom Scrollbars ───────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
     width: 6px;
     height: 6px;

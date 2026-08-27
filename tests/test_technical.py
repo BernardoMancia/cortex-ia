@@ -17,12 +17,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from analysis.technical import TechnicalAnalyzer, TrendSignal
 from models.data_models import Action, OHLCV
 
-
 @pytest.fixture
 def analyzer() -> TechnicalAnalyzer:
     """Instância do TechnicalAnalyzer para testes."""
     return TechnicalAnalyzer()
-
 
 class TestSignalGeneration:
     """Testes para geração de sinais técnicos."""
@@ -32,7 +30,6 @@ class TestSignalGeneration:
     ) -> None:
         """Tendência de alta clara deve gerar sinal de COMPRA."""
         signal = analyzer.analyze('PETR4', sample_ohlcv_data)
-        # Dados são de tendência de alta → deve ser BUY, STRONG_BUY ou NEUTRAL
         assert signal.signal in (TrendSignal.BUY, TrendSignal.STRONG_BUY, TrendSignal.NEUTRAL)
         assert signal.ema_9 > 0
         assert signal.ema_21 > 0

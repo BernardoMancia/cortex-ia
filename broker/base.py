@@ -21,17 +21,11 @@ logger = logging.getLogger("cortex.broker")
 
 BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Enums
-# ═══════════════════════════════════════════════════════════════════
-
 class OrderType(Enum):
     """Tipo de ordem: compra ou venda."""
 
     BUY = "BUY"
     SELL = "SELL"
-
 
 class OrderStatus(Enum):
     """Status de uma ordem enviada ao mercado."""
@@ -40,11 +34,6 @@ class OrderStatus(Enum):
     FILLED = "FILLED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Dataclasses de domínio
-# ═══════════════════════════════════════════════════════════════════
 
 @dataclass
 class Order:
@@ -99,7 +88,6 @@ class Order:
             "timestamp": self.timestamp.isoformat(),
             "comment": self.comment,
         }
-
 
 @dataclass
 class Position:
@@ -168,11 +156,6 @@ class Position:
             "pnl_percent": self.pnl_percent,
             "total_value": self.total_value,
         }
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Classe base abstrata
-# ═══════════════════════════════════════════════════════════════════
 
 class BrokerBase(ABC):
     """
@@ -299,6 +282,4 @@ class BrokerBase(ABC):
         """
         ...
 
-
-# Alias de compatibilidade com código legado
 BaseBroker = BrokerBase

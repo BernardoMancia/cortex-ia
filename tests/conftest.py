@@ -9,13 +9,11 @@ from pathlib import Path
 
 import pytest
 
-# Garantir que o projeto raiz está no sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.data_models import Action, BRT, Decision, OHLCV, Position
-
 
 @pytest.fixture
 def sample_position() -> Position:
@@ -28,7 +26,6 @@ def sample_position() -> Position:
         current_price=30.00,
     )
 
-
 @pytest.fixture
 def sample_position_below_sl() -> Position:
     """Posição com preço abaixo do stop-loss."""
@@ -39,7 +36,6 @@ def sample_position_below_sl() -> Position:
         stop_loss=54.00,
         current_price=53.00,
     )
-
 
 @pytest.fixture
 def sample_decision_buy() -> Decision:
@@ -55,7 +51,6 @@ def sample_decision_buy() -> Decision:
         price=40.00,
         stop_loss=36.00,
     )
-
 
 @pytest.fixture
 def sample_ohlcv_data() -> list[OHLCV]:
@@ -87,7 +82,6 @@ def sample_ohlcv_data() -> list[OHLCV]:
         candles.append(candle)
 
     return candles
-
 
 @pytest.fixture
 def bearish_ohlcv_data() -> list[OHLCV]:

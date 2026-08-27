@@ -22,15 +22,7 @@ from config.settings import settings
 
 logger = logging.getLogger("cortex.data.market_data")
 
-# TODO: When utils.logger is importable without circular deps, switch to:
-# from utils.logger import get_logger
-# logger = get_logger(__name__)
-
 BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
-
-# ═══════════════════════════════════════════════════════════════════
-#  Mapeamento de tickers B3 → Yahoo Finance
-# ═══════════════════════════════════════════════════════════════════
 
 def _b3_to_yfinance(ticker: str) -> str:
     """
@@ -47,7 +39,6 @@ def _b3_to_yfinance(ticker: str) -> str:
         clean += ".SA"
     return clean
 
-
 def _yfinance_to_b3(ticker: str) -> str:
     """
     Converte ticker Yahoo Finance para formato B3.
@@ -59,11 +50,6 @@ def _yfinance_to_b3(ticker: str) -> str:
         Código B3 (ex.: 'PETR4').
     """
     return ticker.upper().replace(".SA", "").strip()
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Cache de preços com TTL
-# ═══════════════════════════════════════════════════════════════════
 
 class _PriceCache:
     """Cache thread-safe de preços com TTL configurável."""
@@ -113,11 +99,6 @@ class _PriceCache:
         with self._lock:
             self._cache.clear()
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Classe principal
-# ═══════════════════════════════════════════════════════════════════
-
 class MarketData:
     """
     Provedor de dados de mercado.
@@ -145,14 +126,12 @@ class MarketData:
         self._broker: Any = broker
         self._cache: _PriceCache = _PriceCache()
         self._yf_available: bool = False
-        # Caches legado para compatibilidade
         self._price_cache_legacy: dict[str, float] = {}
         self._previous_prices: dict[str, float] = {}
         self._legacy_lock: threading.Lock = threading.Lock()
 
-        # Verificar disponibilidade do yfinance
         try:
-            import yfinance  # noqa: F401
+            import yfinance
             self._yf_available = True
             logger.info("yfinance disponível como fonte primária de dados")
         except ImportError:
@@ -161,10 +140,9 @@ class MarketData:
                 "Execute: pip install yfinance"
             )
 
-        # Verificar disponibilidade do MT5 (para fallback)
         self._mt5_available: bool = False
         try:
-            import MetaTrader5  # noqa: F401
+            import MetaTrader5
             self._mt5_available = True
             logger.info("MetaTrader5 disponível como fonte secundária")
         except ImportError:
@@ -175,10 +153,6 @@ class MarketData:
             self._yf_available,
             self._mt5_available,
         )
-
-    # ══════════════════════════════════════════════════════════════
-    #  Preço atual
-    # ══════════════════════════════════════════════════════════════
 
     def get_current_price(self, ticker: str) -> dict[str, Any]:
         """
@@ -198,13 +172,11 @@ class MarketData:
         """
         ticker = ticker.upper().strip().rstrip("Ff")
 
-        # ── Verificar cache ──────────────────────────────────────
         cached = self._cache.get(ticker)
         if cached is not None:
             logger.debug("Cache hit para %s", ticker)
             return cached
 
-        # ── Tentar yfinance ──────────────────────────────────────
         if self._yf_available:
             result = self._get_price_yfinance(ticker)
             if result is not None:
@@ -212,7 +184,6 @@ class MarketData:
                 self._update_legacy_cache(ticker, result.get("last", 0.0))
                 return result
 
-        # ── Fallback para MT5 ────────────────────────────────────
         if self._mt5_available:
             result = self._get_price_mt5(ticker)
             if result is not None:
@@ -242,7 +213,6 @@ class MarketData:
         results: dict[str, dict[str, Any]] = {}
         missing_tickers: list[str] = []
 
-        # 1. Checar cache
         for ticker in tickers:
             clean = ticker.upper().strip().rstrip("Ff")
             cached = self._cache.get(clean)
@@ -254,7 +224,6 @@ class MarketData:
         if not missing_tickers:
             return results
 
-        # 2. Buscar em paralelo com workers
         def _fetch_single(t: str) -> tuple[str, Optional[dict[str, Any]]]:
             try:
                 p = self.get_current_price(t)
@@ -329,7 +298,6 @@ class MarketData:
             try:
                 yf_ticker = yf.Ticker(yf_symbol)
 
-                # Tentar fast_info primeiro (mais rápido)
                 try:
                     fast = yf_ticker.fast_info
                     last_price = float(
@@ -356,7 +324,6 @@ class MarketData:
                 except Exception:
                     pass
 
-                # Fallback para history intraday
                 hist = yf_ticker.history(period="1d", interval="1m")
                 if hist is not None and not hist.empty:
                     last_row = hist.iloc[-1]
@@ -375,7 +342,6 @@ class MarketData:
                     logger.debug("Preço %s via history: R$%.2f", ticker, last_price)
                     return result
 
-                # Fallback para history diário
                 hist_daily = yf_ticker.history(period="5d")
                 if hist_daily is not None and not hist_daily.empty:
                     last_row = hist_daily.iloc[-1]
@@ -398,7 +364,6 @@ class MarketData:
                     "yfinance retornou dados vazios para %s",
                     yf_symbol,
                 )
-                # Tentar 1mo como última alternativa rápida
                 hist_month = yf_ticker.history(period="1mo")
                 if hist_month is not None and not hist_month.empty:
                     last_row = hist_month.iloc[-1]
@@ -464,10 +429,6 @@ class MarketData:
         except Exception as exc:
             logger.warning("Erro ao obter preço via MT5 para %s: %s", ticker, exc)
         return None
-
-    # ══════════════════════════════════════════════════════════════
-    #  Dados históricos OHLCV
-    # ══════════════════════════════════════════════════════════════
 
     def get_ohlcv(
         self,
@@ -559,10 +520,6 @@ class MarketData:
         )
         return self.get_ohlcv(ticker, period=period, interval=interval)
 
-    # ══════════════════════════════════════════════════════════════
-    #  Utilitários
-    # ══════════════════════════════════════════════════════════════
-
     def get_multiple_prices(self, tickers: list[str]) -> dict[str, dict[str, Any]]:
         """
         Obtém preços de múltiplos ativos.
@@ -593,7 +550,6 @@ class MarketData:
                     "error": str(exc),
                 }
 
-        # Limitar workers para evitar rate-limiting do yfinance
         max_workers = min(5, len(tickers))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(_fetch_one, t): t for t in tickers}
@@ -607,10 +563,6 @@ class MarketData:
         """Limpa o cache de preços."""
         self._cache.clear()
         logger.debug("Cache de preços limpo")
-
-    # ══════════════════════════════════════════════════════════════
-    #  Métodos legado (compatibilidade retroativa)
-    # ══════════════════════════════════════════════════════════════
 
     def _update_legacy_cache(self, ticker: str, price: float) -> None:
         """Atualiza cache legado de preços simples (thread-safe)."""

@@ -15,14 +15,11 @@ from models.data_models import BRT
 
 logger = logging.getLogger('cortex.scraping.news')
 
-
-# Feeds RSS de notícias financeiras brasileiras
 RSS_FEEDS: list[dict[str, str]] = [
     {'name': 'InfoMoney', 'url': 'https://www.infomoney.com.br/feed/'},
     {'name': 'Valor Econômico', 'url': 'https://valor.globo.com/rss/valor'},
     {'name': 'Investing.com BR', 'url': 'https://br.investing.com/rss/news.rss'},
 ]
-
 
 class NewsScraper:
     """Scraper de notícias financeiras via RSS feeds."""
@@ -31,7 +28,7 @@ class NewsScraper:
         """Inicializa o scraper de notícias."""
         self._cache: list[dict[str, Any]] = []
         self._last_fetch: datetime | None = None
-        self._cache_ttl_seconds: int = 300  # 5 minutos
+        self._cache_ttl_seconds: int = 300
         logger.info('NewsScraper inicializado — %d feeds configurados', len(RSS_FEEDS))
 
     def scrape(self, tickers: list[str] | None = None) -> list[dict[str, Any]]:
@@ -46,7 +43,6 @@ class NewsScraper:
         """
         now = datetime.now(BRT)
 
-        # Usar cache se recente
         if (
             self._last_fetch is not None
             and (now - self._last_fetch).total_seconds() < self._cache_ttl_seconds
@@ -89,7 +85,7 @@ class NewsScraper:
             feed = feedparser.parse(url)
             news: list[dict[str, Any]] = []
 
-            for entry in feed.entries[:20]:  # Limitar a 20 por fonte
+            for entry in feed.entries[:20]:
                 item: dict[str, Any] = {
                     'title': getattr(entry, 'title', ''),
                     'summary': getattr(entry, 'summary', ''),
@@ -113,7 +109,6 @@ class NewsScraper:
         news: list[dict[str, Any]], tickers: list[str]
     ) -> list[dict[str, Any]]:
         """Filtra notícias que mencionam os tickers especificados."""
-        # Incluir também o nome das empresas comuns
         ticker_aliases: dict[str, list[str]] = {
             'PETR4': ['petrobras', 'petr4'],
             'VALE3': ['vale', 'vale3'],
@@ -157,10 +152,8 @@ class NewsScraper:
                     break
 
             if not matched:
-                # Notícias gerais de mercado
                 market_keywords = ['ibovespa', 'b3', 'bolsa', 'mercado', 'ações']
                 if any(kw in text for kw in market_keywords):
                     general_news.append(item)
 
-        # Retornar notícias específicas + gerais
         return filtered + general_news[:5]

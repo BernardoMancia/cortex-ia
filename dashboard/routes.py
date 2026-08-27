@@ -34,7 +34,6 @@ def get_status(request: Request) -> dict[str, Any]:
         "watchlist": [],
     }
 
-    # 1. Tentar ler do estado vivo em memória (DashboardState)
     dashboard_state = getattr(request.app.state, "dashboard_state", None)
     if dashboard_state is not None:
         try:
@@ -50,7 +49,6 @@ def get_status(request: Request) -> dict[str, Any]:
         except Exception as exc:
             logger.warning("Falha ao ler dashboard_state em memória: %s", exc)
 
-    # 2. Fallback para simulator_state.json se balance/equity ainda estiverem zerados
     if status["equity"] == 0.0 and os.path.exists(SIMULATOR_STATE_PATH):
         try:
             with open(SIMULATOR_STATE_PATH, "r", encoding="utf-8") as f:
@@ -68,7 +66,6 @@ def get_status(request: Request) -> dict[str, Any]:
         except Exception as exc:
             logger.warning('Falha ao ler simulator_state.json: %s', exc)
 
-    # 3. Fallback de decisões do DB se vazio
     if not status["recent_decisions"] and os.path.exists(DB_PATH):
         conn = None
         try:
@@ -166,8 +163,6 @@ async def websocket_logs(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
 
-# ── Endpoints de Desempenho e Histórico (Fase A) ──
-
 @router.get("/api/trades")
 def get_trades(days: int = 30) -> dict[str, Any]:
     """Retorna o histórico de trades dos últimos dias."""
@@ -187,7 +182,6 @@ def get_equity_curve(days: int = 30) -> dict[str, Any]:
     db = DatabaseManager()
     try:
         reports = db.get_report_history(days=days)
-        # Ordenar crescente para o gráfico
         reports.sort(key=lambda r: r['date'])
         return {"status": "ok", "curve": reports}
     except Exception as exc:

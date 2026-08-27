@@ -13,7 +13,7 @@
 </head>
 <body>
     <div class="app-wrapper">
-        <!-- ── HEADER RESPONSIVO ── -->
+
         <header class="app-header glass-card">
             <div class="header-left">
                 <div class="brand-logo">
@@ -43,7 +43,6 @@
             </div>
         </header>
 
-        <!-- ── NAVEGAÇÃO DE ABAS PARA MOBILE / TABLET ── -->
         <nav class="mobile-nav-tabs glass-card" id="mobileTabs">
             <button class="nav-tab active" data-tab="tab-overview">
                 <span class="tab-icon">📊</span>
@@ -67,7 +66,6 @@
             </button>
         </nav>
 
-        <!-- ── CARDS DE RESUMO KPI (FLUID GRID) ── -->
         <section class="kpi-grid">
             <div class="kpi-card glass-card">
                 <div class="kpi-icon-wrap icon-equity">💰</div>
@@ -118,10 +116,8 @@
             </div>
         </section>
 
-        <!-- ── CONTEÚDO PRINCIPAL (DESKTOP GRID / MOBILE TABS) ── -->
         <main class="dashboard-main-grid">
 
-            <!-- ── SEÇÃO 1: CARTEIRA & POSIÇÕES ABERTAS ── -->
             <section class="content-panel glass-card tab-content active" id="tab-positions">
                 <div class="panel-header">
                     <div class="header-title">
@@ -140,7 +136,6 @@
                     </div>
                 </div>
 
-                <!-- Tabela para Desktop / Tablets -->
                 <div class="table-responsive-container" id="positionsTableWrap">
                     <table class="data-table" id="positions-table">
                         <thead>
@@ -156,18 +151,16 @@
                             </tr>
                         </thead>
                         <tbody id="positions-tbody">
-                            <!-- Injetado via JS -->
+
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Cards para Mobile -->
                 <div class="positions-cards-container" id="positionsCardsWrap">
-                    <!-- Injetado via JS -->
+
                 </div>
             </section>
 
-            <!-- ── SEÇÃO 2: ALOCAÇÃO DA CARTEIRA ── -->
             <section class="content-panel glass-card tab-content active" id="tab-overview">
                 <div class="panel-header">
                     <div class="header-title">
@@ -179,11 +172,10 @@
                     <canvas id="allocationChart"></canvas>
                 </div>
                 <div class="allocation-legend-grid" id="chartLegendCustom">
-                    <!-- Legenda Customizada -->
+
                 </div>
             </section>
 
-            <!-- ── SEÇÃO 3: CÉREBRO IA & DECISÕES RECENTES ── -->
             <section class="content-panel glass-card tab-content" id="tab-brain">
                 <div class="panel-header">
                     <div class="header-title">
@@ -197,11 +189,10 @@
                     </div>
                 </div>
                 <div class="decisions-timeline" id="decisions-timeline">
-                    <!-- Injetado via JS -->
+
                 </div>
             </section>
 
-            <!-- ── SEÇÃO 4: NOTÍCIAS RECENTES B3 ── -->
             <section class="content-panel glass-card tab-content" id="tab-news">
                 <div class="panel-header">
                     <div class="header-title">
@@ -214,7 +205,6 @@
                 </div>
             </section>
 
-            <!-- ── SEÇÃO 5: TERMINAL & LOGS EM TEMPO REAL ── -->
             <section class="content-panel glass-card logs-wide-panel tab-content" id="tab-terminal">
                 <div class="panel-header">
                     <div class="header-title">
@@ -228,12 +218,11 @@
                     </div>
                 </div>
                 <div class="terminal-screen" id="log-terminal">
-                    <!-- Logs via WebSocket -->
+
                 </div>
             </section>
         </main>
 
-        <!-- ── FOOTER RESPONSIVO ── -->
         <footer class="app-footer glass-card">
             <div class="footer-left">
                 <span>Córtex IA v2.5 — Autonomous Trading System</span>

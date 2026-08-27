@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.risk_manager import RiskManager
 from models.data_models import Position
 
-
 class TestCalculateStopLoss:
     """Testes para o cálculo de stop-loss."""
 
@@ -47,7 +46,6 @@ class TestCalculateStopLoss:
         """Stop-loss com preço zero deve retornar zero."""
         rm = RiskManager()
         assert rm.calculate_stop_loss(0.0) == pytest.approx(0.0)
-
 
 class TestCheckStopLossTriggers:
     """Testes para verificação de gatilhos de stop-loss."""
@@ -142,7 +140,7 @@ class TestCheckStopLossTriggers:
             quantity=10,
             entry_price=30.00,
             stop_loss=27.00,
-            current_price=26.00,  # Preço em cache abaixo do SL
+            current_price=26.00,
         )
         market_data = MagicMock()
         market_data.get_current_price.return_value = None
@@ -150,7 +148,6 @@ class TestCheckStopLossTriggers:
         triggered = rm.check_stop_loss_triggers([position], market_data)
 
         assert len(triggered) == 1
-
 
 class TestValidateOrder:
     """Testes para validação de ordens."""
@@ -247,7 +244,6 @@ class TestValidateOrder:
         )
         assert is_valid is True
 
-
 class TestGetMaxShares:
     """Testes para cálculo de quantidade máxima de ações."""
 
@@ -255,7 +251,7 @@ class TestGetMaxShares:
         """Cálculo padrão de max shares."""
         rm = RiskManager()
         max_shares = rm.get_max_shares(price=30.00, available_capital=200.00)
-        assert max_shares == 6  # 200 / 30 = 6.66 → 6
+        assert max_shares == 6
 
     def test_get_max_shares_limited_by_max(self) -> None:
         """Max shares deve ser limitado pelo teto configurado."""

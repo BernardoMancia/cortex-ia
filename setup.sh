@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# ========================================================
-#   Córtex IA — Instalador Automático de Ambiente (Linux/macOS/VPS)
-# ========================================================
 set -e
 
-# Detectar interpretador Python
 if command -v python3 &>/dev/null; then
     PYTHON_BIN="python3"
 elif command -v python &>/dev/null; then

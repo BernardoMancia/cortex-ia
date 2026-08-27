@@ -28,12 +28,7 @@ except ImportError:
 
 logger = get_logger('analysis.sentiment')
 
-# Timezone BRT (UTC-3)
 BRT = timezone(timedelta(hours=-3))
-
-
-# ─── Protocolo para itens de notícia ────────────────────────────────────────
-
 
 @runtime_checkable
 class NewsItem(Protocol):
@@ -56,27 +51,18 @@ class NewsItem(Protocol):
     @property
     def source(self) -> str: ...
 
-
-# ─── Dataclasses ─────────────────────────────────────────────────────────────
-
-
 @dataclass
 class SentimentResult:
     """Resultado consolidado da análise de sentimento para um ativo."""
 
-    score: float        # -1.0 a 1.0
-    label: str          # 'POSITIVO', 'NEGATIVO', 'NEUTRO'
-    confidence: float   # 0.0 a 1.0
+    score: float
+    label: str
+    confidence: float
     news_count: int
     top_headline: str
-    reasoning: str      # Explicação em português
-
-
-# ─── Léxico Financeiro em Português ─────────────────────────────────────────
-
+    reasoning: str
 
 POSITIVE_KEYWORDS: dict[str, float] = {
-    # Multi-word (testados primeiro para match correto)
     'resultado positivo': 0.9,
     'acima do esperado': 0.8,
     'recomendação de compra': 0.9,
@@ -87,7 +73,6 @@ POSITIVE_KEYWORDS: dict[str, float] = {
     'geração de caixa': 0.6,
     'margem operacional': 0.5,
     'revisão para cima': 0.7,
-    # Single-word
     'lucro': 0.8,
     'alta': 0.6,
     'crescimento': 0.7,
@@ -118,7 +103,6 @@ POSITIVE_KEYWORDS: dict[str, float] = {
 }
 
 NEGATIVE_KEYWORDS: dict[str, float] = {
-    # Multi-word (testados primeiro para match correto)
     'resultado negativo': -0.9,
     'abaixo do esperado': -0.8,
     'recomendação de venda': -0.9,
@@ -127,7 +111,6 @@ NEGATIVE_KEYWORDS: dict[str, float] = {
     'recuperação judicial': -0.9,
     'oferta subsequente': -0.4,
     'aumento de capital': -0.3,
-    # Single-word
     'prejuízo': -0.8,
     'queda': -0.6,
     'crise': -0.9,
@@ -159,10 +142,6 @@ NEGATIVE_KEYWORDS: dict[str, float] = {
     'underperform': -0.7,
 }
 
-
-# ─── Motor de Análise de Sentimento ─────────────────────────────────────────
-
-
 class SentimentAnalyzer:
     """
     Motor de análise de sentimento do Córtex.
@@ -177,7 +156,6 @@ class SentimentAnalyzer:
     para minimizar consumo de memória quando não necessário.
     """
 
-    # Taxa de decaimento exponencial para ponderação por recência
     RECENCY_DECAY: float = 0.05
 
     def __init__(self, mode: str = 'lightweight') -> None:
@@ -197,12 +175,11 @@ class SentimentAnalyzer:
             )
 
         self.mode = mode
-        self._pipeline = None  # Lazy loading para FinBERT
+        self._pipeline = None
         self._cache: dict[str, tuple[SentimentResult, float]] = {}
         self.cache_ttl: float = float(getattr(settings, 'SENTIMENT_CACHE_TTL', 1800))
         self._last_gemini_call: float = 0.0
         
-        # Init Gemini Se disponível e selecionado
         if self.mode == 'gemini':
             if not GENAI_AVAILABLE:
                 logger.warning("Modo gemini selecionado, mas 'google-genai' não está instalado. Fallback para lightweight.")
@@ -230,7 +207,7 @@ class SentimentAnalyzer:
 
         logger.info('Carregando modelo FinBERT-PT-BR...')
         try:
-            from transformers import pipeline as hf_pipeline  # type: ignore[import-untyped]
+            from transformers import pipeline as hf_pipeline
             self._pipeline = hf_pipeline(
                 'text-classification',
                 model='lucas-leme/FinBERT-PT-BR',
@@ -286,9 +263,8 @@ class SentimentAnalyzer:
         self._load_finbert()
 
         try:
-            # Trunca texto para limite do modelo (512 tokens ~= 2000 chars)
             truncated = text[:2000]
-            result = self._pipeline(truncated)  # type: ignore[misc]
+            result = self._pipeline(truncated)
 
             if not result:
                 return 0.0
@@ -331,34 +307,26 @@ class SentimentAnalyzer:
         match_count = 0
         weight_multiplier = 2.0 if is_title else 1.0
 
-        # Combinar ambos os léxicos, ordenando expressões multi-palavra primeiro
-        # para evitar que 'resultado positivo' seja contado como apenas 'positivo'
         all_keywords: dict[str, float] = {}
         all_keywords.update(POSITIVE_KEYWORDS)
         all_keywords.update(NEGATIVE_KEYWORDS)
 
-        # Ordenar por tamanho decrescente (multi-palavra primeiro)
         sorted_keywords = sorted(all_keywords.keys(), key=len, reverse=True)
 
-        # Texto de trabalho — remove termos já contabilizados
         remaining_text = text_lower
 
         for keyword in sorted_keywords:
             count = remaining_text.count(keyword)
             if count > 0:
                 score = all_keywords[keyword]
-                # Peso decresce com repetições: 1ª = 100%, 2ª = 50%, 3ª = 33%...
                 weighted = sum(score / (i + 1) for i in range(count))
                 total_score += weighted * weight_multiplier
                 match_count += count
-                # Remove termos encontrados para evitar contagem dupla
                 remaining_text = remaining_text.replace(keyword, ' ')
 
         if match_count == 0:
             return 0.0
 
-        # Normalizar: divide pelo total de matches para manter na escala
-        # e aplica clamp para garantir [-1.0, 1.0]
         normalized = total_score / match_count
         return clamp(normalized, -1.0, 1.0)
 
@@ -385,14 +353,11 @@ class SentimentAnalyzer:
 
         for item in news_items:
             try:
-                # Calcular score do texto (título tem peso dobrado)
                 title_score = self._analyze_single_text(item.title, is_title=True)
                 body_score = self._analyze_single_text(item.summary, is_title=False)
 
-                # Score combinado: título contribui 60%, corpo 40%
                 combined_score = title_score * 0.6 + body_score * 0.4
 
-                # Peso por recência (decaimento exponencial)
                 published = item.published_at
                 if published.tzinfo is None:
                     published = published.replace(tzinfo=BRT)
@@ -502,7 +467,6 @@ class SentimentAnalyzer:
         """
         now_ts = time.time()
 
-        # ── 1. Verificar Cache Válido ─────────────────────────────────
         if not force_refresh and ticker in self._cache:
             cached_result, cached_time = self._cache[ticker]
             elapsed = now_ts - cached_time
@@ -514,9 +478,7 @@ class SentimentAnalyzer:
                 )
                 return cached_result
 
-        # ── 2. Análise via Gemini (com Grounding e Rate Limiter) ──────
         if self.mode == 'gemini' and GENAI_AVAILABLE and allow_gemini:
-            # Rate Limiter: garantir pelo menos 4s entre chamadas consecutivas ao Gemini (máx 15 RPM)
             elapsed_gemini = now_ts - self._last_gemini_call
             if elapsed_gemini < 4.0:
                 sleep_time = 4.0 - elapsed_gemini
@@ -528,7 +490,6 @@ class SentimentAnalyzer:
         else:
             result = self._get_sentiment_local(ticker, news_items)
 
-        # ── 3. Salvar no Cache ────────────────────────────────────────
         self._cache[ticker] = (result, time.time())
 
         logger.info(
@@ -579,14 +540,10 @@ class SentimentAnalyzer:
         Returns:
             Confiança entre 0.0 e 1.0.
         """
-        # Componente de magnitude: score absoluto (0.0 a 1.0)
         magnitude_component = abs(score)
 
-        # Componente de volume: logarítmica, satura em ~16 notícias
-        # log2(1) = 0, log2(2) = 1, log2(8) = 3, log2(16) = 4
         volume_component = min(1.0, math.log2(max(1, news_count)) / 4.0)
 
-        # Confiança combinada com pesos
         if magnitude_component == 0.0 and volume_component == 0.0:
             return 0.0
 
@@ -618,7 +575,6 @@ class SentimentAnalyzer:
         """
         parts: list[str] = []
 
-        # Descrição do sentimento
         score_fmt = f'{score:+.2f}'.replace('.', ',')
 
         if label == 'POSITIVO':
@@ -634,13 +590,11 @@ class SentimentAnalyzer:
                 f'Sentimento de mercado para {ticker}: {score_fmt} (neutro).'
             )
 
-        # Volume de notícias
         if news_count == 1:
             parts.append('Baseado em 1 notícia recente.')
         else:
             parts.append(f'Baseado em {news_count} notícias recentes.')
 
-        # Confiança
         if confidence >= 0.7:
             parts.append('Alta confiança na análise.')
         elif confidence >= 0.4:
@@ -648,7 +602,6 @@ class SentimentAnalyzer:
         else:
             parts.append('Baixa confiança — poucas notícias ou sentimento fraco.')
 
-        # Manchete principal
         headline_truncated = (
             top_headline[:80] + '...' if len(top_headline) > 80 else top_headline
         )
@@ -667,7 +620,6 @@ class SentimentAnalyzer:
         logger.info('Solicitando análise Gemini para %s com busca Web', ticker)
         
         try:
-            # Formata notícias locais se existirem
             local_news_context = ""
             if news_items:
                 local_news_context = "Notícias locais coletadas previamente:\n"
@@ -702,7 +654,6 @@ Com base na sua pesquisa e no contexto atual do mercado brasileiro, responda SOM
             )
             text_response = response.text
             
-            # Extrai JSON com regex para robustez
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text_response, re.DOTALL)
             if not json_match:
                 raise ValueError(f'Resposta do Gemini não contém JSON válido: {text_response[:200]}')

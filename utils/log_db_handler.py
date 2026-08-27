@@ -35,7 +35,6 @@ INSERT INTO logs (timestamp, level, source, message, raw_line)
 VALUES (?, ?, ?, ?, ?);
 """
 
-
 class SQLiteLogHandler(logging.Handler):
     """
     A :class:`logging.Handler` that writes log records into a SQLite
@@ -55,13 +54,10 @@ class SQLiteLogHandler(logging.Handler):
         self._queue: SimpleQueue[logging.LogRecord | None] = SimpleQueue()
         self._closed = False
 
-        # Ensure directory exists
         Path(os.path.dirname(db_path)).mkdir(parents=True, exist_ok=True)
 
-        # Bootstrap schema
         self._init_db()
 
-        # Background writer thread
         self._writer = threading.Thread(
             target=self._write_loop,
             name="log-db-writer",
@@ -69,7 +65,6 @@ class SQLiteLogHandler(logging.Handler):
         )
         self._writer.start()
 
-    # ── DB bootstrap ──────────────────────────────────────
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
         try:
@@ -78,7 +73,6 @@ class SQLiteLogHandler(logging.Handler):
         finally:
             conn.close()
 
-    # ── Background writer ─────────────────────────────────
     def _write_loop(self) -> None:
         conn = sqlite3.connect(self.db_path)
         try:
@@ -87,7 +81,7 @@ class SQLiteLogHandler(logging.Handler):
                     record = self._queue.get(timeout=1.0)
                 except Empty:
                     continue
-                if record is None:          # Sentinel → exit
+                if record is None:
                     break
                 try:
                     ts = datetime.fromtimestamp(
@@ -103,18 +97,16 @@ class SQLiteLogHandler(logging.Handler):
                     ))
                     conn.commit()
                 except Exception:
-                    # Silently drop — never crash the writer thread
                     pass
         finally:
             conn.close()
 
-    # ── Handler interface ─────────────────────────────────
     def emit(self, record: logging.LogRecord) -> None:
         if not self._closed:
             self._queue.put(record)
 
     def close(self) -> None:
         self._closed = True
-        self._queue.put(None)       # Sentinel to stop the writer
+        self._queue.put(None)
         self._writer.join(timeout=3)
         super().close()

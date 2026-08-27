@@ -20,12 +20,7 @@ from utils.helpers import format_brl, format_percent
 
 logger = get_logger('analysis.decision')
 
-# Timezone BRT (UTC-3)
 BRT = timezone(timedelta(hours=-3))
-
-
-# ─── Protocolos para dependências injetadas ─────────────────────────────────
-
 
 @runtime_checkable
 class RiskManagerProtocol(Protocol):
@@ -35,7 +30,6 @@ class RiskManagerProtocol(Protocol):
 
     def calculate_stop_loss(self, entry_price: float, atr: float | None = None) -> float: ...
 
-
 @runtime_checkable
 class MarketDataProtocol(Protocol):
     """Protocolo para o provedor de dados de mercado."""
@@ -43,7 +37,6 @@ class MarketDataProtocol(Protocol):
     def get_current_price(self, ticker: str) -> dict[str, Any]: ...
 
     def get_ohlcv(self, ticker: str, period: str, interval: str) -> Any: ...
-
 
 @runtime_checkable
 class PortfolioProtocol(Protocol):
@@ -56,16 +49,11 @@ class PortfolioProtocol(Protocol):
 
     def get_all_positions(self) -> list[Any]: ...
 
-
 @runtime_checkable
 class DatabaseProtocol(Protocol):
     """Protocolo para a camada de persistência."""
 
     def insert_decision(self, **kwargs) -> None: ...
-
-
-# ─── Motor de Decisão Autônomo ───────────────────────────────────────────────
-
 
 class DecisionEngine:
     """
@@ -86,7 +74,6 @@ class DecisionEngine:
         8. Retornar Decision
     """
 
-    # Configurações padrão de mercado
     DEFAULT_OHLCV_PERIOD: str = '3mo'
     DEFAULT_OHLCV_INTERVAL: str = '1d'
 
@@ -137,7 +124,6 @@ class DecisionEngine:
         logger.debug('Avaliando %s com %d notícias', ticker, len(news_items))
         now = datetime.now(BRT)
 
-        # ── 1. Obter preço atual com fallback resiliente ──────────────────
         current_price = None
         price_data = None
         try:
@@ -146,7 +132,6 @@ class DecisionEngine:
         except Exception as exc:
             logger.debug('Preço direto indisponível para %s: %s', ticker, exc)
 
-        # ── 2. Obter histórico OHLCV ────────────────────────────────────
         df = self.market_data.get_ohlcv(
             ticker=ticker, period=self.DEFAULT_OHLCV_PERIOD, interval=self.DEFAULT_OHLCV_INTERVAL
         )
@@ -185,7 +170,6 @@ class DecisionEngine:
                 timestamp=now,
             )
 
-        # ── 3. Análise técnica ───────────────────────────────────────────
         try:
             tech_result = self.technical.analyze(ticker, df)
         except ValueError as exc:
@@ -205,7 +189,6 @@ class DecisionEngine:
                 reasoning=f'Análise técnica indisponível: {exc}',
             )
 
-        # ── 4. Verificar posição existente ───────────────────────────────
         position = self.portfolio.get_position(ticker)
         is_holding = position is not None
 
@@ -218,18 +201,13 @@ class DecisionEngine:
             existing_stop = getattr(position, 'stop_loss', None)
             existing_qty = getattr(position, 'quantity', 0)
 
-        # ── 5. Análise de sentimento inteligente (sob demanda por ativo) ─
-        # Filtrar notícias exclusivas deste ativo (e seus nomes/aliases corporativos)
         ticker_news = self._filter_news_for_ticker(ticker, news_items or [])
 
-        # Economia de cota da IA: só aciona o Gemini se já temos posição aberta
-        # OU se a análise técnica já detectou um sinal de compra/venda (não neutro).
         allow_gemini = is_holding or (tech_result.signal != TrendSignal.NEUTRAL)
         sent_result = self.sentiment.get_sentiment_for_ticker(
             ticker, ticker_news, allow_gemini=allow_gemini
         )
 
-        # ── 6. Se posicionado: verificar stop-loss ───────────────────────
         if is_holding and existing_stop is not None:
             if current_price <= existing_stop:
                 reasoning = self._generate_thinking(
@@ -258,17 +236,13 @@ class DecisionEngine:
                 self._persist_decision(decision, trend_signal=tech_result.signal.value)
                 return decision
 
-        # ── 7. Calcular confiança (antes do sizing) ──────────────────────
         confidence = self._calculate_confidence(tech_result.signal, sent_result.score)
 
-        # ── 8. Determinar ação ───────────────────────────────────────────
         action: Action
         stop_loss: float | None = None
         target_quantity: int = 0
 
         if not is_holding:
-            # Avaliar convergência e setup para BUY
-            # Condição: Sinal técnico altista (STRONG_BUY / BUY) e sentimento corporativo não hostil (>= -0.15)
             is_bullish_tech = tech_result.signal in (TrendSignal.STRONG_BUY, TrendSignal.BUY)
             sentiment_not_hostile = sent_result.score >= -0.15
 
@@ -297,12 +271,10 @@ class DecisionEngine:
                 tech_result.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL)
                 and sent_result.score <= -0.2
             ):
-                # Sem posição + sinal de venda → apenas HOLD (não abre short)
                 action = Action.HOLD
             else:
                 action = Action.HOLD
         else:
-            # Avaliação de posição existente (stop não atingido)
             if (
                 tech_result.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL)
                 or sent_result.score < -0.3
@@ -315,9 +287,6 @@ class DecisionEngine:
                 target_quantity = existing_qty
                 stop_loss = existing_stop
 
-        # (confiança já calculada acima, passo 7)
-
-        # ── 9. Gerar 'Pensamento do Córtex' ──────────────────────────────
         reasoning = self._generate_thinking(
             ticker, tech_result, sent_result, action, position,
             current_price=current_price,
@@ -368,7 +337,6 @@ class DecisionEngine:
         logger.info('Avaliando watchlist com %d ativos', len(watchlist))
         decisions: list[Decision] = []
 
-        # Separar ativos com posição (prioridade: stop-loss) dos sem posição
         held_tickers: list[str] = []
         free_tickers: list[str] = []
 
@@ -379,19 +347,16 @@ class DecisionEngine:
             else:
                 free_tickers.append(ticker)
 
-        # Avaliar posições existentes primeiro (stop-loss tem prioridade)
         for ticker in held_tickers:
             ticker_news = self._filter_news_for_ticker(ticker, news_items)
             decision = self.evaluate(ticker, ticker_news)
             decisions.append(decision)
 
-        # Avaliar ativos sem posição
         for ticker in free_tickers:
             ticker_news = self._filter_news_for_ticker(ticker, news_items)
             decision = self.evaluate(ticker, ticker_news)
             decisions.append(decision)
 
-        # Resumo
         actionable = [d for d in decisions if d.action != Action.HOLD]
         logger.info(
             'Avaliação concluída: %d decisões totais, %d acionáveis',
@@ -436,10 +401,8 @@ class DecisionEngine:
         parts: list[str] = []
         fractional_ticker = f'{ticker}F'
 
-        # ── Setup técnico ────────────────────────────────────────────────
         parts.append(tech.reasoning)
 
-        # ── Sentimento Corporativo Individual ────────────────────────────
         score_fmt = f'{sent.score:+.2f}'.replace('.', ',')
         if sent.news_count > 0 and sent.top_headline and sent.top_headline not in ('Sem notícias disponíveis', 'Sem notícias específicas'):
             headline_trunc = (
@@ -453,7 +416,6 @@ class DecisionEngine:
 
         parts.append(f'{sentiment_desc}.')
 
-        # ── Decisão e raciocínio ─────────────────────────────────────────
         if action == Action.EMERGENCY_SELL:
             entry_price = getattr(position, 'entry_price', 0.0) if position else 0.0
             pos_stop = getattr(position, 'stop_loss', 0.0) if position else (stop_loss or 0.0)
@@ -588,7 +550,6 @@ class DecisionEngine:
         if trend_signal == TrendSignal.NEUTRAL:
             return 0.30
 
-        # Sinais conflitantes
         return 0.35
 
     TICKER_ALIASES: dict[str, list[str]] = {

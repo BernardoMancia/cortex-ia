@@ -16,7 +16,6 @@ import urllib3.util.connection as urllib3_cn
 from datetime import datetime
 from typing import Any, Optional
 
-# Força o urllib3 a usar apenas IPv4 (corrige timeout em VPS com IPv6 quebrado para o Telegram)
 def allowed_gai_family():
     return socket.AF_INET
 urllib3_cn.allowed_gai_family = allowed_gai_family
@@ -26,7 +25,6 @@ import requests
 from models.data_models import Action, BRT, Decision, PortfolioSummary
 
 logger = logging.getLogger('cortex.notifications.telegram')
-
 
 class TelegramNotifier:
     """Notificador de alertas via Telegram Bot API."""
@@ -99,7 +97,6 @@ class TelegramNotifier:
         url = f"https://api.telegram.org/bot{self.token}/getUpdates"
         while not self._stop_event.is_set():
             try:
-                # Usa long polling de 30s
                 resp = requests.get(url, params={'offset': offset, 'timeout': 30}, timeout=40)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -112,13 +109,12 @@ class TelegramNotifier:
                         logger.info(f"Telegram MSG: chat_id={chat_id}, text={text}")
                         
                         if text.startswith('/'):
-                            # Trata @botname se enviado em grupo
                             parts = text.split(' ')
                             cmd = parts[0].split('@')[0]
                             
                             logger.info(f"Comando recebido: {cmd} de chat: {chat_id}")
                             
-                            if True: # Always allow commands, or you could restrict to a list of allowed chats
+                            if True:
                                 if cmd in self.command_callbacks:
                                     try:
                                         logger.info(f"Executando callback para {cmd}")
@@ -171,7 +167,6 @@ class TelegramNotifier:
                     response.status_code, response.text[:200],
                 )
 
-            # Registrar no banco de dados
             if self.db is not None:
                 try:
                     self.db.insert_telegram_log(

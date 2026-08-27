@@ -24,7 +24,6 @@ from models.data_models import BRT, Position
 
 logger = logging.getLogger('cortex.risk_manager')
 
-
 class RiskManager:
     """Gerenciador de risco para operações de trading da B3."""
 
@@ -57,7 +56,6 @@ class RiskManager:
         self.trailing_stop_activation = getattr(settings, 'TRAILING_STOP_TRIGGER_PERCENT', 0.02)
         self.trailing_stop_distance = getattr(settings, 'TRAILING_STOP_DISTANCE_PERCENT', 0.015)
 
-        # Compatibilidade com atributos de classe/instância
         self.MIN_SHARES = self.min_shares
         self.MAX_SHARES = self.max_shares
         self.MAX_CONCENTRATION = self.max_concentration
@@ -153,13 +151,11 @@ class RiskManager:
         if position.current_price is None or position.current_price <= 0:
             return False
 
-        # Calcular ganho atual
         gain_pct = (position.current_price - position.entry_price) / position.entry_price
 
         if gain_pct < self.TRAILING_STOP_ACTIVATION:
             return False
 
-        # Calcular novo stop baseado no preço atual
         new_stop = position.current_price * (1.0 - self.stop_loss_percent)
 
         if new_stop > position.stop_loss:
@@ -205,14 +201,12 @@ class RiskManager:
                     position.ticker
                 )
 
-                # get_current_price() retorna dict {"last": ..., "bid": ...}
                 if isinstance(price_data, dict):
                     current_price = price_data.get('last')
                 else:
                     current_price = price_data
 
                 if current_price is None:
-                    # Usar preço em cache na posição se disponível
                     current_price = position.current_price
 
                 if current_price is None or current_price <= 0:
@@ -222,10 +216,8 @@ class RiskManager:
                     )
                     continue
 
-                # Atualizar preço atual na posição
                 position.current_price = current_price
 
-                # Atualizar trailing stop se posição em lucro
                 self.update_trailing_stop(position)
 
                 if current_price <= position.stop_loss:
@@ -303,7 +295,6 @@ class RiskManager:
             Se válida: (True, 'Ordem válida').
             Se inválida: (False, 'motivo da rejeição').
         """
-        # Verificar circuit breaker
         if self._circuit_breaker_active:
             reason = (
                 f'Circuit breaker ativo — operações suspensas '
@@ -312,7 +303,6 @@ class RiskManager:
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason
 
-        # Validar limite de posições abertas simultâneas (se configurado > 0)
         if self.max_positions > 0 and positions is not None:
             is_new = not any(p.ticker.rstrip('Ff') == ticker.rstrip('Ff') for p in positions)
             if is_new and len(positions) >= self.max_positions:
@@ -320,7 +310,6 @@ class RiskManager:
                 logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
                 return False, reason
 
-        # Validar quantidade no mercado fracionário/padrão
         if quantity < self.MIN_SHARES:
             reason = (
                 f'Quantidade inválida: {quantity} < {self.MIN_SHARES} '
@@ -337,7 +326,6 @@ class RiskManager:
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason
 
-        # Validar capital disponível
         total_cost = price * quantity
         if total_cost > available_capital:
             reason = (
@@ -347,7 +335,6 @@ class RiskManager:
             logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
             return False, reason
 
-        # Validar concentração máxima por ativo e por setor
         if total_portfolio_value > 0:
             concentration = total_cost / total_portfolio_value
             if concentration > self.MAX_CONCENTRATION:
@@ -374,7 +361,6 @@ class RiskManager:
                     logger.warning('Ordem rejeitada para %s: %s', ticker, reason)
                     return False, reason
 
-        # Ordem válida
         logger.info(
             'Ordem validada: %s — %d ações @ R$ %.2f = R$ %.2f '
             '(capital disponível: R$ %.2f)',
@@ -419,10 +405,8 @@ class RiskManager:
             )
             return 0
 
-        # Limite por capital disponível
         max_by_capital = int(available_capital / price)
 
-        # Limite por concentração
         if total_portfolio_value > 0:
             max_by_concentration = int(
                 (total_portfolio_value * self.MAX_CONCENTRATION) / price
@@ -443,7 +427,6 @@ class RiskManager:
         else:
             max_shares = max_by_capital
 
-        # Modular por confiança (confiança < 0.5 → metade, >= 0.8 → 100%)
         if confidence < 0.5:
             confidence_factor = 0.5
         elif confidence < 0.7:
@@ -453,7 +436,6 @@ class RiskManager:
 
         max_shares = int(max_shares * confidence_factor)
 
-        # Aplicar limites do mercado fracionário
         result = max(0, min(max_shares, self.MAX_SHARES))
 
         logger.debug(

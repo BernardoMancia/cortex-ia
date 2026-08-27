@@ -13,7 +13,6 @@ import subprocess
 import shutil
 from pathlib import Path
 
-# Configurar encoding UTF-8 seguro para Windows cp1252/cp850
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -51,7 +50,6 @@ def main():
     root_dir = Path(__file__).resolve().parent
     venv_dir = root_dir / ".venv"
 
-    # 1. Verificar Versão do Python
     py_ver = sys.version_info
     log_info(f"Sistema Operacional: {platform.system()} {platform.release()} ({platform.machine()})")
     log_info(f"Interpretador Python: {sys.executable} (v{py_ver.major}.{py_ver.minor}.{py_ver.micro})")
@@ -61,7 +59,6 @@ def main():
         log_warn("Por favor, instale uma versao mais recente do Python (recomendado 3.12).")
         sys.exit(1)
 
-    # 2. Criar Ambiente Virtual (.venv)
     if not venv_dir.exists() or not (venv_dir / "pyvenv.cfg").exists():
         log_info(f"Criando ambiente virtual em: {venv_dir}...")
         try:
@@ -75,7 +72,6 @@ def main():
     else:
         log_ok(f"Ambiente virtual ja existente em: {venv_dir}")
 
-    # Determinar executáveis dentro do venv
     if IS_WINDOWS:
         venv_python = venv_dir / "Scripts" / "python.exe"
         venv_pip = venv_dir / "Scripts" / "pip.exe"
@@ -87,17 +83,14 @@ def main():
         log_error(f"Executavel Python nao encontrado no ambiente: {venv_python}")
         sys.exit(1)
 
-    # 3. Atualizar pip, setuptools e wheel
     log_info("Atualizando pip, setuptools e wheel...")
     subprocess.run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel", "--quiet"], check=False)
     log_ok("Gerenciador de pacotes pip atualizado.")
 
-    # 4. Instalar Dependências (requirements.txt)
     req_file = root_dir / "requirements.txt"
     if req_file.exists():
         log_info("Instalando dependencias de requirements.txt...")
         
-        # Se estiver no Linux/macOS, ignorar MetaTrader5 que é exclusivo de Windows
         if not IS_WINDOWS:
             temp_req = root_dir / ".temp_requirements_linux.txt"
             lines = req_file.read_text(encoding="utf-8").splitlines()
@@ -119,14 +112,12 @@ def main():
     else:
         log_warn("Arquivo requirements.txt nao encontrado.")
 
-    # 5. Criar Pastas Estruturais Obrigatórias
     log_info("Verificando diretorios de execucao...")
     for folder in ["data", "logs", "backups"]:
         p = root_dir / folder
         p.mkdir(parents=True, exist_ok=True)
     log_ok("Diretorios 'data/', 'logs/' e 'backups/' verificados.")
 
-    # 6. Configurar .env a partir de .env.example
     env_file = root_dir / ".env"
     env_example = root_dir / ".env.example"
     if not env_file.exists() and env_example.exists():
@@ -135,7 +126,6 @@ def main():
     elif env_file.exists():
         log_ok("Arquivo '.env' ja configurado.")
 
-    # 7. Teste de Sanidade (Health Check dos Módulos)
     log_info("Validando importacoes dos modulos do Cortex IA...")
     test_code = """
 import core.engine
@@ -152,7 +142,6 @@ print('[TESTE OK] Todos os modulos carregados com sucesso.')
     else:
         log_warn(f"Aviso na verificacao de modulos:\n{test_res.stderr}")
 
-    # 8. Instruções Finais de Uso
     print("")
     print(color("------------------------------------------------------------", "32"))
     print(color("[SUCESSO] INSTALACAO DO AMBIENTE CONCLUIDA COM SUCESSO!", "32"))

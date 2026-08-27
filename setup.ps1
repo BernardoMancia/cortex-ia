@@ -1,6 +1,3 @@
-# ========================================================
-#   Córtex IA — Instalador Automático (PowerShell)
-# ========================================================
 Write-Host "Iniciando instalador do ambiente Córtex IA..." -ForegroundColor Cyan
 
 if (Get-Command python -ErrorAction SilentlyContinue) {

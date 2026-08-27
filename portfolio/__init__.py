@@ -16,7 +16,6 @@ from models.data_models import Position, PortfolioSummary
 
 logger = logging.getLogger('cortex.portfolio')
 
-
 class Portfolio:
     """Gerenciador de portfólio do sistema de trading."""
 

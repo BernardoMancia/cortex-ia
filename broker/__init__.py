@@ -17,7 +17,6 @@ from broker.simulator import SimulatorBroker
 from models.data_models import Position, PortfolioSummary
 from portfolio import Portfolio
 
-
 def create_broker(mode: str | None = None) -> BrokerBase:
     """
     Função-fábrica que cria a instância de broker adequada.
@@ -53,7 +52,6 @@ def create_broker(mode: str | None = None) -> BrokerBase:
             f"Modo de broker desconhecido: '{mode}'. "
             f"Use 'simulator' ou 'mt5'."
         )
-
 
 __all__ = [
     "BaseBroker",

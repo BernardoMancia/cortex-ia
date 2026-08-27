@@ -94,26 +94,24 @@ class RestMT5Broker(BrokerBase):
         now = datetime.now(tz=BRT)
         symbol = self._fractional_ticker(ticker)
         req = {
-            "action": 1, # TRADE_ACTION_DEAL
+            "action": 1,
             "symbol": symbol,
             "volume": float(quantity),
-            "type": 0, # ORDER_TYPE_BUY
+            "type": 0,
             "price": price,
             "sl": stop_loss,
             "tp": 0.0,
             "deviation": 20,
             "magic": self.MAGIC_NUMBER,
             "comment": "Cortex BUY",
-            "type_time": 0, # ORDER_TIME_GTC
-            "type_filling": 1 # ORDER_FILLING_IOC (fallback)
+            "type_time": 0,
+            "type_filling": 1
         }
         
-        # Check first
         check = self._api_call("order_check", req)
         if not check or check.get("retcode") != 0:
             return Order(ticker, OrderType.BUY, quantity, price, stop_loss, OrderStatus.REJECTED, timestamp=now)
             
-        # Send
         res = self._api_call("order_send", req)
         if res and res.get("retcode") == 10009:
             return Order(ticker, OrderType.BUY, quantity, res.get("price", price), stop_loss, OrderStatus.FILLED, res.get("order"), now)
@@ -127,7 +125,7 @@ class RestMT5Broker(BrokerBase):
             "action": 1,
             "symbol": symbol,
             "volume": float(quantity),
-            "type": 1, # ORDER_TYPE_SELL
+            "type": 1,
             "price": price,
             "deviation": 20,
             "magic": self.MAGIC_NUMBER,

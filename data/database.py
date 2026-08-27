@@ -20,25 +20,16 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ────────────────────────────────────────────────────────────
-# Timezone BRT
-# ────────────────────────────────────────────────────────────
 _BRT = timezone(timedelta(hours=-3), name="BRT")
-
 
 def _now_brt_iso() -> str:
     """Retorna timestamp atual em BRT no formato ISO 8601."""
     return datetime.now(tz=_BRT).isoformat()
 
-
 def _today_brt_iso() -> str:
     """Retorna a data atual em BRT no formato ISO 8601 (só data)."""
     return datetime.now(tz=_BRT).date().isoformat()
 
-
-# ────────────────────────────────────────────────────────────
-# SQL de criação das tabelas
-# ────────────────────────────────────────────────────────────
 _CREATE_TABLES_SQL: str = """
 CREATE TABLE IF NOT EXISTS trades (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +127,6 @@ CREATE INDEX IF NOT EXISTS idx_health_timestamp    ON system_health(timestamp);
 CREATE INDEX IF NOT EXISTS idx_news_ticker         ON news_items(ticker);
 CREATE INDEX IF NOT EXISTS idx_news_published      ON news_items(published_at);
 """
-
 
 class DatabaseManager:
     """
@@ -291,10 +281,6 @@ class DatabaseManager:
                 logger.error("Erro na consulta SQL: %s | Params: %s | Erro: %s", sql, params, exc)
                 return None
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — Trades
-    # ────────────────────────────────────────────────────────
-
     def insert_trade(
         self,
         ticker: str,
@@ -343,10 +329,6 @@ class DatabaseManager:
         )
         return row_id
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — Sentiment
-    # ────────────────────────────────────────────────────────
-
     def insert_sentiment(
         self,
         ticker: str,
@@ -381,10 +363,6 @@ class DatabaseManager:
         )
         return row_id
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — Market Snapshot
-    # ────────────────────────────────────────────────────────
-
     def insert_snapshot(
         self,
         ticker: str,
@@ -415,10 +393,6 @@ class DatabaseManager:
                VALUES (?, ?, ?, ?, ?, ?)""",
             (ticker.upper(), price, volume, bid, ask, ts),
         )
-
-    # ────────────────────────────────────────────────────────
-    # INSERT — Daily Report
-    # ────────────────────────────────────────────────────────
 
     def insert_daily_report(
         self,
@@ -470,10 +444,6 @@ class DatabaseManager:
         )
         return row_id
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — AI Decision
-    # ────────────────────────────────────────────────────────
-
     def insert_decision(
         self,
         ticker: str,
@@ -514,10 +484,6 @@ class DatabaseManager:
         )
         return row_id
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — Telegram Log
-    # ────────────────────────────────────────────────────────
-
     def insert_telegram_log(
         self,
         message_type: str,
@@ -545,10 +511,6 @@ class DatabaseManager:
             (message_type, content, ts, int(success)),
         )
 
-    # ────────────────────────────────────────────────────────
-    # INSERT — System Health
-    # ────────────────────────────────────────────────────────
-
     def insert_health(
         self,
         cpu_percent: float,
@@ -575,10 +537,6 @@ class DatabaseManager:
                VALUES (?, ?, ?, ?)""",
             (cpu_percent, ram_percent, disk_percent, ts),
         )
-
-    # ────────────────────────────────────────────────────────
-    # INSERT — News Items
-    # ────────────────────────────────────────────────────────
 
     def insert_news(
         self,
@@ -624,10 +582,6 @@ class DatabaseManager:
             logger.debug("Notícia duplicada ou erro: %s", exc)
             return None
 
-    # ────────────────────────────────────────────────────────
-    # QUERY — Trades
-    # ────────────────────────────────────────────────────────
-
     def get_trades_today(self) -> list[dict[str, Any]]:
         """
         Retorna todos os trades realizados hoje (BRT).
@@ -656,10 +610,6 @@ class DatabaseManager:
             "SELECT * FROM trades WHERE timestamp >= ? ORDER BY timestamp DESC",
             (cutoff,),
         )
-
-    # ────────────────────────────────────────────────────────
-    # QUERY — Sentiment
-    # ────────────────────────────────────────────────────────
 
     def get_latest_sentiment(self, ticker: str) -> dict[str, Any] | None:
         """
@@ -703,10 +653,6 @@ class DatabaseManager:
             (f"{today}%",),
         )
 
-    # ────────────────────────────────────────────────────────
-    # QUERY — Daily Reports
-    # ────────────────────────────────────────────────────────
-
     def get_daily_report(self, report_date: str | date | None = None) -> dict[str, Any] | None:
         """
         Retorna o relatório diário para a data especificada.
@@ -745,10 +691,6 @@ class DatabaseManager:
             (cutoff,),
         )
 
-    # ────────────────────────────────────────────────────────
-    # QUERY — AI Decisions
-    # ────────────────────────────────────────────────────────
-
     def get_decisions_today(self) -> list[dict[str, Any]]:
         """
         Retorna todas as decisões da IA tomadas hoje (BRT).
@@ -779,10 +721,6 @@ class DatabaseManager:
             (ticker.upper(),),
         )
 
-    # ────────────────────────────────────────────────────────
-    # QUERY — Market Snapshots
-    # ────────────────────────────────────────────────────────
-
     def get_latest_snapshot(self, ticker: str) -> dict[str, Any] | None:
         """
         Retorna o snapshot de mercado mais recente de um ativo.
@@ -800,10 +738,6 @@ class DatabaseManager:
             (ticker.upper(),),
         )
 
-    # ────────────────────────────────────────────────────────
-    # QUERY — System Health
-    # ────────────────────────────────────────────────────────
-
     def get_latest_health(self) -> dict[str, Any] | None:
         """
         Retorna a métrica de saúde mais recente do sistema.
@@ -814,10 +748,6 @@ class DatabaseManager:
         return self._fetch_one(
             "SELECT * FROM system_health ORDER BY timestamp DESC LIMIT 1",
         )
-
-    # ────────────────────────────────────────────────────────
-    # QUERY — News Items
-    # ────────────────────────────────────────────────────────
 
     def get_recent_news(self, limit: int = 50) -> list[dict[str, Any]]:
         """
@@ -851,10 +781,6 @@ class DatabaseManager:
                ORDER BY published_at DESC LIMIT ?""",
             (ticker.upper(), limit),
         )
-
-    # ────────────────────────────────────────────────────────
-    # QUERY — AI Decisions History
-    # ────────────────────────────────────────────────────────
 
     def get_decisions_history(
         self, ticker: str | None = None, days: int = 30, limit: int = 100,
@@ -904,14 +830,12 @@ class DatabaseManager:
         total_buys = sum(1 for t in trades if t.get('action') == 'BUY')
         total_sells = sum(1 for t in trades if t.get('action') == 'SELL')
 
-        # P&L dos relatórios diários
         pnl_values = [r.get('pnl_percent', 0.0) for r in reports if r.get('pnl_percent')]
         positive_days = sum(1 for p in pnl_values if p > 0)
         negative_days = sum(1 for p in pnl_values if p < 0)
         win_rate = (positive_days / len(pnl_values) * 100) if pnl_values else 0.0
         avg_pnl = sum(pnl_values) / len(pnl_values) if pnl_values else 0.0
 
-        # Max drawdown
         max_drawdown = min(pnl_values) if pnl_values else 0.0
 
         return {
@@ -925,10 +849,6 @@ class DatabaseManager:
             'avg_daily_pnl': round(avg_pnl, 2),
             'max_drawdown': round(max_drawdown, 2),
         }
-
-    # ────────────────────────────────────────────────────────
-    # Utilitários
-    # ────────────────────────────────────────────────────────
 
     def count_trades_today(self) -> dict[str, int]:
         """

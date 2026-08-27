@@ -28,21 +28,12 @@ logger = logging.getLogger("cortex.data.news_scraper")
 
 BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Constantes
-# ═══════════════════════════════════════════════════════════════════
-
-# Tickers B3 para detecção de menções (incluindo variações comuns)
 _B3_TICKERS: set[str] = set(settings.watchlist)
 
-# Regex para encontrar menções a tickers B3 em texto
-# Padrão: 4 letras maiúsculas + 1-2 dígitos (opcionalmente + F)
 _TICKER_PATTERN: re.Pattern[str] = re.compile(
     r"\b([A-Z]{4}\d{1,2}F?)\b"
 )
 
-# User-Agents para rotação (evitar bloqueio)
 _USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
@@ -51,13 +42,7 @@ _USER_AGENTS: list[str] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36 Edg/125.0.0.0",
 ]
 
-# Tamanho máximo do set de URLs vistas (para deduplicação)
 _MAX_SEEN_URLS: int = 1000
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Modelo de dados
-# ═══════════════════════════════════════════════════════════════════
 
 @dataclass
 class NewsItem:
@@ -91,11 +76,6 @@ class NewsItem:
             "tickers_mentioned": self.tickers_mentioned,
         }
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Helpers
-# ═══════════════════════════════════════════════════════════════════
-
 def _extract_tickers(text: str) -> list[str]:
     """
     Extrai tickers B3 mencionados em um texto.
@@ -109,8 +89,6 @@ def _extract_tickers(text: str) -> list[str]:
     if not text:
         return []
     matches = _TICKER_PATTERN.findall(text.upper())
-    # Filtrar apenas tickers conhecidos na watchlist
-    # mas também aceitar qualquer padrão válido de ticker B3
     found: set[str] = set()
     for match in matches:
         base = match.rstrip("Ff")
@@ -118,11 +96,9 @@ def _extract_tickers(text: str) -> list[str]:
             found.add(base)
     return sorted(found)
 
-
 def _random_user_agent() -> str:
     """Retorna um User-Agent aleatório para rotação."""
     return random.choice(_USER_AGENTS)
-
 
 def _parse_rss_date(date_str: str) -> datetime:
     """
@@ -151,10 +127,8 @@ def _parse_rss_date(date_str: str) -> datetime:
         except ValueError:
             continue
 
-    # Fallback: retorna agora
     logger.debug("Formato de data não reconhecido: '%s'", date_str)
     return datetime.now(tz=BRT)
-
 
 def _clean_html(text: str) -> str:
     """Remove tags HTML de um texto."""
@@ -163,11 +137,6 @@ def _clean_html(text: str) -> str:
     clean = re.sub(r"<[^>]+>", "", text)
     clean = re.sub(r"\s+", " ", clean).strip()
     return clean
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  LRU Set para deduplicação de URLs
-# ═══════════════════════════════════════════════════════════════════
 
 class _LRUSet:
     """Set com tamanho máximo que descarta entradas mais antigas (LRU)."""
@@ -212,11 +181,6 @@ class _LRUSet:
         with self._lock:
             return len(self._data)
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Classe principal
-# ═══════════════════════════════════════════════════════════════════
-
 class NewsScraper:
     """
     Scraper de notícias financeiras para ativos B3.
@@ -244,10 +208,6 @@ class NewsScraper:
         self._session: requests.Session = requests.Session()
         logger.info("NewsScraper inicializado — timeout: %ds", timeout)
 
-    # ══════════════════════════════════════════════════════════════
-    #  Rate limiting
-    # ══════════════════════════════════════════════════════════════
-
     def _wait_rate_limit(self, source: str) -> None:
         """
         Aguarda para respeitar rate limit (1 req/s por fonte).
@@ -266,10 +226,6 @@ class NewsScraper:
         if wait > 0.0:
             logger.debug("Rate limit %s — aguardando %.2fs", source, wait)
             time.sleep(wait)
-
-    # ══════════════════════════════════════════════════════════════
-    #  Requisição HTTP
-    # ══════════════════════════════════════════════════════════════
 
     def _fetch(self, url: str, source: str) -> Optional[str]:
         """
@@ -304,10 +260,6 @@ class NewsScraper:
             logger.warning("Erro de requisição para %s: %s", source, exc)
 
         return None
-
-    # ══════════════════════════════════════════════════════════════
-    #  Google News RSS
-    # ══════════════════════════════════════════════════════════════
 
     def _fetch_google_news(self, query: str = "bolsa B3 ações") -> list[NewsItem]:
         """
@@ -378,10 +330,6 @@ class NewsScraper:
 
         return items
 
-    # ══════════════════════════════════════════════════════════════
-    #  InfoMoney RSS
-    # ══════════════════════════════════════════════════════════════
-
     def _fetch_infomoney(self) -> list[NewsItem]:
         """
         Coleta notícias do feed RSS da InfoMoney.
@@ -443,10 +391,6 @@ class NewsScraper:
             logger.warning("Erro inesperado no InfoMoney: %s", exc)
 
         return items
-
-    # ══════════════════════════════════════════════════════════════
-    #  Investing.com BR (scraping)
-    # ══════════════════════════════════════════════════════════════
 
     def _fetch_valor_investe(self) -> list[NewsItem]:
         """
@@ -572,10 +516,6 @@ class NewsScraper:
 
         return items
 
-    # ══════════════════════════════════════════════════════════════
-    #  Interface pública
-    # ══════════════════════════════════════════════════════════════
-
     def fetch_all_news(self) -> list[NewsItem]:
         """
         Coleta notícias de todas as fontes disponíveis.
@@ -590,35 +530,30 @@ class NewsScraper:
         """
         all_news: list[NewsItem] = []
 
-        # ── Google News ──────────────────────────────────────────
         try:
             google_items = self._fetch_google_news()
             all_news.extend(google_items)
         except Exception as exc:
             logger.warning("Falha ao coletar Google News: %s", exc)
 
-        # ── InfoMoney ────────────────────────────────────────────
         try:
             infomoney_items = self._fetch_infomoney()
             all_news.extend(infomoney_items)
         except Exception as exc:
             logger.warning("Falha ao coletar InfoMoney: %s", exc)
 
-        # ── Valor Investe ────────────────────────────────────────
         try:
             valor_items = self._fetch_valor_investe()
             all_news.extend(valor_items)
         except Exception as exc:
             logger.warning("Falha ao coletar Valor Investe: %s", exc)
 
-        # ── Money Times ──────────────────────────────────────────
         try:
             money_items = self._fetch_money_times()
             all_news.extend(money_items)
         except Exception as exc:
             logger.warning("Falha ao coletar Money Times: %s", exc)
 
-        # Ordenar por data (mais recente primeiro)
         all_news.sort(key=lambda n: n.published_at, reverse=True)
 
         logger.info(
@@ -646,7 +581,6 @@ class NewsScraper:
         """
         ticker = ticker.upper().strip().rstrip("Ff")
 
-        # Busca direcionada no Google News
         news: list[NewsItem] = []
         try:
             google_items = self._fetch_google_news(query=f"{ticker} ações B3")
@@ -654,7 +588,6 @@ class NewsScraper:
         except Exception as exc:
             logger.warning("Falha ao buscar notícias de %s no Google News: %s", ticker, exc)
 
-        # Buscar em fontes gerais e filtrar
         try:
             infomoney_items = self._fetch_infomoney()
             for item in infomoney_items:
@@ -663,13 +596,11 @@ class NewsScraper:
         except Exception as exc:
             logger.warning("Falha ao filtrar notícias de %s no InfoMoney: %s", ticker, exc)
 
-        # Filtrar apenas notícias que mencionam o ticker
         filtered: list[NewsItem] = []
         for item in news:
             if ticker in item.tickers_mentioned:
                 filtered.append(item)
             elif ticker.lower() in item.title.lower() or ticker.lower() in item.summary.lower():
-                # Menção direta no texto sem estar na watchlist
                 if ticker not in item.tickers_mentioned:
                     item.tickers_mentioned.append(ticker)
                 filtered.append(item)

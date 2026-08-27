@@ -12,9 +12,7 @@ from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any, Optional
 
-# Timezone BRT (UTC-3)
 BRT = timezone(timedelta(hours=-3))
-
 
 class Action(Enum):
     """Ações possíveis no sistema de trading."""
@@ -22,7 +20,6 @@ class Action(Enum):
     SELL = 'VENDA'
     HOLD = 'AGUARDAR'
     EMERGENCY_SELL = 'VENDA_EMERGENCIAL'
-
 
 @dataclass
 class Position:
@@ -58,7 +55,6 @@ class Position:
             return 0.0
         return (self.pnl / self.total_cost) * 100.0
 
-
 @dataclass
 class Decision:
     """Decisão gerada pelo DecisionEngine."""
@@ -78,7 +74,6 @@ class Decision:
         """Verifica se a decisão é acionável (não é HOLD)."""
         return self.action in (Action.BUY, Action.SELL, Action.EMERGENCY_SELL)
 
-
 @dataclass
 class OHLCV:
     """Dados de candle OHLCV."""
@@ -90,8 +85,6 @@ class OHLCV:
     close: float
     volume: int
 
-
-
 @dataclass
 class MarketSnapshot:
     """Snapshot do mercado em um momento específico."""
@@ -99,7 +92,6 @@ class MarketSnapshot:
     prices: dict[str, float] = field(default_factory=dict)
     volumes: dict[str, int] = field(default_factory=dict)
     variations: dict[str, float] = field(default_factory=dict)
-
 
 @dataclass
 class PortfolioSummary:
@@ -118,7 +110,6 @@ class PortfolioSummary:
         """String legível do modo de operação."""
         return 'SIMULAÇÃO' if self.simulation_mode else 'PRODUÇÃO'
 
-
 @dataclass
 class TradeRecord:
     """Registro de uma operação executada."""
@@ -131,7 +122,6 @@ class TradeRecord:
     stop_loss: float = 0.0
     reasoning: str = ''
     mode: str = 'SIMULAÇÃO'
-
 
 @dataclass
 class HealthReport:
@@ -156,5 +146,4 @@ class HealthReport:
             self.alerts.append(f'RAM em {self.ram_percent:.1f}%')
         if self.disk_percent >= 95.0:
             self.alerts.append(f'Disco em {self.disk_percent:.1f}%')
-
 

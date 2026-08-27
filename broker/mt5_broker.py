@@ -25,19 +25,13 @@ logger = logging.getLogger("cortex.broker.mt5")
 
 BRT: ZoneInfo = ZoneInfo("America/Sao_Paulo")
 
-# Tentar importar MetaTrader5 — só disponível em Windows
 _mt5_available: bool = False
 try:
     if platform.system() == "Windows":
-        import MetaTrader5 as mt5  # type: ignore[import-untyped]
+        import MetaTrader5 as mt5
         _mt5_available = True
 except ImportError:
-    mt5 = None  # type: ignore[assignment]
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Mapeamento de retcodes MT5
-# ═══════════════════════════════════════════════════════════════════
+    mt5 = None
 
 _MT5_RETCODE_MESSAGES: dict[int, str] = {
     10004: "Requote — preço mudou",
@@ -80,11 +74,9 @@ _MT5_RETCODE_MESSAGES: dict[int, str] = {
     10043: "Requisição rejeitada — regra de hedge-only",
 }
 
-
 def _retcode_to_message(retcode: int) -> str:
     """Converte retcode MT5 em mensagem legível."""
     return _MT5_RETCODE_MESSAGES.get(retcode, f"Código desconhecido: {retcode}")
-
 
 class MT5Broker(BrokerBase):
     """
@@ -118,10 +110,6 @@ class MT5Broker(BrokerBase):
             self._login,
             self._server,
         )
-
-    # ══════════════════════════════════════════════════════════════
-    #  Helpers internos
-    # ══════════════════════════════════════════════════════════════
 
     def _check_platform(self) -> None:
         """
@@ -158,7 +146,6 @@ class MT5Broker(BrokerBase):
             ConnectionError: Se não conseguir restabelecer conexão.
         """
         if self._connected:
-            # Verificação rápida de saúde da conexão
             try:
                 info = mt5.account_info()
                 if info is not None:
@@ -196,7 +183,6 @@ class MT5Broker(BrokerBase):
             if not mt5.symbol_select(symbol, True):
                 logger.error("Falha ao selecionar símbolo %s no Market Watch", symbol)
                 return False
-            # Aguardar símbolo ficar disponível
             time.sleep(0.5)
 
         return True
@@ -218,7 +204,6 @@ class MT5Broker(BrokerBase):
 
         filling = info.filling_mode
 
-        # Verificar modos suportados (bitwise flags)
         if filling & mt5.SYMBOL_FILLING_FOK:
             return mt5.ORDER_FILLING_FOK
         elif filling & mt5.SYMBOL_FILLING_IOC:
@@ -234,10 +219,6 @@ class MT5Broker(BrokerBase):
             ticker += "F"
         return ticker
 
-    # ══════════════════════════════════════════════════════════════
-    #  Interface BrokerBase
-    # ══════════════════════════════════════════════════════════════
-
     def connect(self) -> bool:
         """
         Conecta ao terminal MetaTrader 5.
@@ -252,7 +233,6 @@ class MT5Broker(BrokerBase):
         self._check_mt5_available()
 
         with self._lock:
-            # Inicializar terminal
             init_kwargs: dict[str, Any] = {}
             if self._mt5_path:
                 init_kwargs["path"] = self._mt5_path
@@ -263,7 +243,6 @@ class MT5Broker(BrokerBase):
                 self._connected = False
                 return False
 
-            # Login
             if self._login and self._password and self._server:
                 authorized = mt5.login(
                     login=self._login,
@@ -277,7 +256,6 @@ class MT5Broker(BrokerBase):
                     self._connected = False
                     return False
 
-            # Verificar conta
             account_info = mt5.account_info()
             if account_info is None:
                 logger.error("Não foi possível obter informações da conta MT5")
@@ -382,7 +360,6 @@ class MT5Broker(BrokerBase):
                 "type_filling": filling_mode,
             }
 
-            # Pré-validação
             check_result = mt5.order_check(request)
             if check_result is None or check_result.retcode != 0:
                 retcode = check_result.retcode if check_result else -1
@@ -394,7 +371,6 @@ class MT5Broker(BrokerBase):
                     timestamp=now, comment=msg,
                 )
 
-            # Enviar ordem
             result = mt5.order_send(request)
             if result is None:
                 error = mt5.last_error()
@@ -406,7 +382,7 @@ class MT5Broker(BrokerBase):
                     timestamp=now, comment=msg,
                 )
 
-            if result.retcode == 10009:  # TRADE_RETCODE_DONE
+            if result.retcode == 10009:
                 logger.info(
                     "COMPRA MT5 executada: %s | %d × R$%.2f | Ticket: %d",
                     symbol, quantity, result.price, result.order,
@@ -417,7 +393,7 @@ class MT5Broker(BrokerBase):
                     status=OrderStatus.FILLED, ticket=result.order,
                     timestamp=now, comment=f"MT5 executada — {result.comment}",
                 )
-            elif result.retcode == 10008:  # TRADE_RETCODE_PLACED
+            elif result.retcode == 10008:
                 logger.info(
                     "Compra MT5 colocada: %s | Ticket: %d", symbol, result.order,
                 )
@@ -554,7 +530,6 @@ class MT5Broker(BrokerBase):
                 timestamp=now, comment=f"Sem conexão MT5: {exc}",
             )
 
-        # Buscar posição aberta
         positions = mt5.positions_get(symbol=symbol)
         if positions is None or len(positions) == 0:
             return Order(
@@ -566,7 +541,6 @@ class MT5Broker(BrokerBase):
         pos = positions[0]
         quantity = int(pos.volume)
 
-        # Obter preço de mercado
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
             return Order(
@@ -602,7 +576,6 @@ class MT5Broker(BrokerBase):
 
         result: list[Position] = []
         for pos in mt5_positions:
-            # Filtrar apenas posições do magic number do Córtex
             if pos.magic != self.MAGIC_NUMBER:
                 continue
 
@@ -663,7 +636,6 @@ class MT5Broker(BrokerBase):
             logger.error("Sem conexão para modificar SL de %s", symbol)
             return False
 
-        # Buscar posição
         positions = mt5.positions_get(symbol=symbol)
         if positions is None or len(positions) == 0:
             logger.warning("Posição %s não encontrada para modificar SL", symbol)

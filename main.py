@@ -19,7 +19,6 @@ import sys
 
 logger = logging.getLogger('cortex.main')
 
-
 def main() -> None:
     """Função principal — ponto de entrada do Projeto Córtex."""
     parser = argparse.ArgumentParser(
@@ -56,7 +55,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # ── Dashboard-only mode ──────────────────────────────────────────────
     if args.dashboard_only:
         try:
             from dashboard.app import DashboardState, DashboardServer
@@ -66,7 +64,6 @@ def main() -> None:
             server = DashboardServer(state, host='0.0.0.0', port=settings.DASHBOARD_PORT)
             print(f'🖥️  Dashboard Córtex iniciando em http://0.0.0.0:{settings.DASHBOARD_PORT}')
             server.start()
-            # Manter thread principal viva (dashboard roda em daemon thread)
             while True:
                 _time.sleep(1)
         except ImportError:
@@ -79,7 +76,6 @@ def main() -> None:
             sys.exit(1)
         return
 
-    # ── Trading Engine ───────────────────────────────────────────────────
     from core.engine import CortexEngine
 
     engine = CortexEngine(
@@ -88,7 +84,6 @@ def main() -> None:
         single_cycle=args.once,
     )
 
-    # ── Graceful Shutdown ────────────────────────────────────────────────
     def shutdown_handler(sig: int, frame: object) -> None:
         """Handler para shutdown gracioso via SIGINT/SIGTERM."""
         signame = signal.Signals(sig).name
@@ -100,10 +95,8 @@ def main() -> None:
     try:
         signal.signal(signal.SIGTERM, shutdown_handler)
     except (OSError, AttributeError):
-        # SIGTERM não disponível no Windows em todas as situações
         pass
 
-    # ── Iniciar e Executar ───────────────────────────────────────────────
     try:
         engine.start()
         engine.run()
@@ -111,7 +104,6 @@ def main() -> None:
         logger.critical('Erro fatal: %s', e, exc_info=True)
         engine.stop()
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main()

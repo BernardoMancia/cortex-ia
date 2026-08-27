@@ -8,11 +8,7 @@ cálculos financeiros e conversão de tickers.
 from datetime import datetime, timezone, timedelta
 from typing import Final
 
-# ────────────────────────────────────────────────────────────
-# Timezone BRT (UTC-3)
-# ────────────────────────────────────────────────────────────
 BRT: Final[timezone] = timezone(timedelta(hours=-3), name="BRT")
-
 
 def format_brl(value: float) -> str:
     """
@@ -37,7 +33,6 @@ def format_brl(value: float) -> str:
     sign = '-' if value < 0 else ''
     return f"{sign}R$ {formatted}"
 
-
 def get_brt_now() -> datetime:
     """
     Retorna o datetime atual com timezone BRT (UTC-3).
@@ -46,7 +41,6 @@ def get_brt_now() -> datetime:
         Datetime timezone-aware no horário de Brasília.
     """
     return datetime.now(tz=BRT)
-
 
 def percentage_change(old: float, new: float) -> float:
     """
@@ -70,7 +64,6 @@ def percentage_change(old: float, new: float) -> float:
     if old == 0.0:
         return 0.0
     return ((new - old) / old) * 100.0
-
 
 def safe_division(a: float, b: float, default: float = 0.0) -> float:
     """
@@ -96,7 +89,6 @@ def safe_division(a: float, b: float, default: float = 0.0) -> float:
     if b == 0.0:
         return default
     return a / b
-
 
 def ensure_fractional_ticker(ticker: str) -> str:
     """
@@ -125,7 +117,6 @@ def ensure_fractional_ticker(ticker: str) -> str:
         return f"{ticker}F"
     return ticker
 
-
 def to_yfinance_ticker(ticker: str) -> str:
     """
     Converte ticker da B3 para o formato do Yahoo Finance.
@@ -149,18 +140,13 @@ def to_yfinance_ticker(ticker: str) -> str:
         'BPAC11.SA'
     """
     ticker = ticker.strip().upper()
-    # Remove sufixo fracionário
     if ticker.endswith("F") and not ticker.endswith("SA"):
-        # Verifica se não é um ticker que termina naturalmente com F
-        # Tickers da B3 terminam com número + F no fracionário
         base = ticker[:-1]
         if base and base[-1].isdigit():
             ticker = base
-    # Adiciona sufixo SA se não presente
     if not ticker.endswith(".SA"):
         return f"{ticker}.SA"
     return ticker
-
 
 def format_timestamp(dt: datetime) -> str:
     """
@@ -180,12 +166,10 @@ def format_timestamp(dt: datetime) -> str:
         >>> format_timestamp(dt)
         '09/07/2026 14:30:00 BRT'
     """
-    # Converte para BRT se timezone-aware
     if dt.tzinfo is not None:
         dt = dt.astimezone(BRT)
 
     return dt.strftime("%d/%m/%Y %H:%M:%S") + " BRT"
-
 
 def truncate_text(text: str, max_len: int = 200) -> str:
     """
@@ -214,7 +198,6 @@ def truncate_text(text: str, max_len: int = 200) -> str:
         return text
     return text[: max_len - 3] + "..."
 
-
 def format_percent(value: float, decimals: int = 2) -> str:
     """
     Formata valor como percentual no padrão brasileiro.
@@ -237,7 +220,6 @@ def format_percent(value: float, decimals: int = 2) -> str:
     formatted = f"{pct:.{decimals}f}".replace(".", ",")
     return f"{formatted}%"
 
-
 def format_number(value: float, decimals: int = 2) -> str:
     """
     Formata número decimal no padrão brasileiro.
@@ -258,7 +240,6 @@ def format_number(value: float, decimals: int = 2) -> str:
     """
     formatted = f"{value:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return formatted
-
 
 def clamp(value: float, min_val: float, max_val: float) -> float:
     """

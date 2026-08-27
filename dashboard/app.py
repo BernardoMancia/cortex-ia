@@ -16,11 +16,9 @@ app.add_middleware(
 
 from fastapi.responses import FileResponse
 
-# Mount static files
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Include routes
 app.include_router(router)
 
 @app.get("/")
@@ -30,13 +28,8 @@ async def root():
         return FileResponse(index_path)
     return {"message": "Córtex IA Dashboard API is running."}
 
-
-# ────────────────────────────────────────────────────────────
-# DashboardState — thread-safe runtime state container
-# ────────────────────────────────────────────────────────────
 import threading
 from datetime import datetime, timezone
-
 
 class DashboardState:
     """
@@ -59,7 +52,6 @@ class DashboardState:
             "updated_at": None,
         }
 
-    # ── Mutations ─────────────────────────────────────────
     def update(self, key: str, value) -> None:
         """Update a single key in the dashboard state."""
         with self._lock:
@@ -73,7 +65,6 @@ class DashboardState:
             if len(self._state["log_lines"]) > max_lines:
                 self._state["log_lines"] = self._state["log_lines"][-max_lines:]
 
-    # ── Reads ─────────────────────────────────────────────
     def get_state(self) -> dict:
         """Return a shallow copy of the current state."""
         with self._lock:
@@ -84,18 +75,11 @@ class DashboardState:
         with self._lock:
             return self._state.get(key, default)
 
-
-# ────────────────────────────────────────────────────────────
-# DashboardServer — runs the FastAPI app in a background thread
-# ────────────────────────────────────────────────────────────
 import uvicorn
-
 
 class _ThreadedServer(uvicorn.Server):
     def install_signal_handlers(self) -> None:
-        # No-op: não tenta instalar signal handlers em thread secundária
         pass
-
 
 class DashboardServer:
     """
@@ -115,7 +99,6 @@ class DashboardServer:
         self._server: _ThreadedServer | None = None
         self._thread: threading.Thread | None = None
 
-        # Expose state on the app so routes can access it
         if state is not None:
             app.state.dashboard_state = state
 
@@ -143,10 +126,6 @@ class DashboardServer:
         if self._thread is not None:
             self._thread.join(timeout=5)
 
-
-# ────────────────────────────────────────────────────────────
-# Factory function (used by __init__.py exports)
-# ────────────────────────────────────────────────────────────
 def create_app() -> FastAPI:
     """Return the pre-configured FastAPI application instance."""
     return app

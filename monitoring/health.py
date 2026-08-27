@@ -20,20 +20,16 @@ from models.data_models import BRT, HealthReport
 
 logger = logging.getLogger('cortex.monitoring.health')
 
-
 class HealthMonitor:
     """Monitor de saúde do sistema com thread daemon."""
 
-    # Thresholds de alerta
     CPU_THRESHOLD: float = 90.0
     RAM_THRESHOLD: float = 90.0
     DISK_THRESHOLD: float = 95.0
 
-    # Intervalo entre verificações (segundos)
     CHECK_INTERVAL: int = 60
 
-    # Cooldown entre alertas (segundos) — evitar spam no Telegram
-    ALERT_COOLDOWN: int = 300  # 5 minutos
+    ALERT_COOLDOWN: int = 300
 
     def __init__(
         self,
@@ -99,14 +95,12 @@ class HealthMonitor:
         with self._lock:
             self._last_report = report
 
-        # Logar métricas
         logger.debug(
             'Saúde: CPU=%.1f%% RAM=%.1f%% Disco=%.1f%% — %s',
             report.cpu_percent, report.ram_percent, report.disk_percent,
             'OK' if report.is_healthy else 'ALERTA',
         )
 
-        # Registrar no banco de dados
         if self.db is not None:
             try:
                 self.db.insert_health(
@@ -115,7 +109,6 @@ class HealthMonitor:
             except Exception as db_err:
                 logger.error('Erro ao salvar métricas no DB: %s', db_err)
 
-        # Enviar alerta se necessário
         if not report.is_healthy:
             self._handle_alert(report)
 
@@ -147,7 +140,6 @@ class HealthMonitor:
             ', '.join(report.alerts),
         )
 
-        # Enviar via Telegram
         if self.telegram is not None:
             try:
                 self.telegram.send_health_alert(

@@ -25,7 +25,6 @@ from models.data_models import Action, BRT, Decision, OHLCV, Position
 from analysis.technical import TechnicalResult, TrendSignal
 from analysis.sentiment import SentimentResult
 
-
 @pytest.fixture
 def market_data() -> MagicMock:
     """MarketData mockado para testes."""
@@ -33,18 +32,15 @@ def market_data() -> MagicMock:
     md.get_current_price.return_value = {'last': 30.00}
     return md
 
-
 @pytest.fixture
 def technical() -> MagicMock:
     """TechnicalAnalyzer mockado."""
     return MagicMock(spec=TechnicalAnalyzer)
 
-
 @pytest.fixture
 def sentiment() -> MagicMock:
     """SentimentAnalyzer mockado."""
     return MagicMock(spec=SentimentAnalyzer)
-
 
 @pytest.fixture
 def engine(
@@ -75,7 +71,6 @@ def engine(
     )
     return engine
 
-
 def _make_candles(count: int = 30, base_price: float = 100.0) -> list[OHLCV]:
     """Gera candles OHLCV de teste."""
     candles: list[OHLCV] = []
@@ -91,7 +86,6 @@ def _make_candles(count: int = 30, base_price: float = 100.0) -> list[OHLCV]:
         ))
     return candles
 
-
 class TestBuyOnConvergence:
     """Testes para decisão de compra quando sinais convergem."""
 
@@ -100,7 +94,6 @@ class TestBuyOnConvergence:
         technical: MagicMock, sentiment: MagicMock,
     ) -> None:
         """Deve gerar BUY quando trend=BUY e sentiment favorável/neutro."""
-        # Configurar mocks
         market_data.get_ohlcv.return_value = _make_candles()
         market_data.get_current_price.return_value = {'last': 30.00}
 
@@ -135,7 +128,6 @@ class TestBuyOnConvergence:
 
         assert decision.action == Action.HOLD
 
-
 class TestHoldOnNoConvergence:
     """Testes para HOLD quando sinais são conflitantes."""
 
@@ -147,7 +139,6 @@ class TestHoldOnNoConvergence:
         market_data.get_ohlcv.return_value = _make_candles()
         market_data.get_current_price.return_value = {'last': 30.00}
 
-        # Técnico: SELL, Sentimento: positivo → conflito
         technical.analyze.return_value = TechnicalResult(signal=TrendSignal.NEUTRAL, ema_9=0.0, ema_21=0.0, ema_50=0.0, rsi=50.0, support=0.0, resistance=0.0, confidence=0.3, reasoning='Sinais conflitantes')
 
         sentiment.get_sentiment_for_ticker.return_value = SentimentResult(score=0.0, label='POS', confidence=1.0, news_count=1, top_headline='', reasoning='')
@@ -159,7 +150,6 @@ class TestHoldOnNoConvergence:
 
         assert decision.action == Action.HOLD
 
-
 class TestEmergencySellOnStopLoss:
     """Testes para venda emergencial quando stop-loss é ativado."""
 
@@ -169,7 +159,7 @@ class TestEmergencySellOnStopLoss:
     ) -> None:
         """Deve gerar EMERGENCY_SELL quando preço <= stop-loss."""
         market_data.get_ohlcv.return_value = _make_candles()
-        market_data.get_current_price.return_value = {'last': 26.00}  # Abaixo do SL
+        market_data.get_current_price.return_value = {'last': 26.00}
 
         from datetime import datetime
         position = Position(
@@ -198,7 +188,7 @@ class TestEmergencySellOnStopLoss:
     ) -> None:
         """Deve gerar EMERGENCY_SELL quando preço == stop-loss."""
         market_data.get_ohlcv.return_value = _make_candles()
-        market_data.get_current_price.return_value = {'last': 27.00}  # Exatamente no SL
+        market_data.get_current_price.return_value = {'last': 27.00}
 
         from datetime import datetime
         position = Position(
@@ -224,7 +214,7 @@ class TestEmergencySellOnStopLoss:
     ) -> None:
         """Não deve gerar EMERGENCY_SELL quando preço > stop-loss."""
         market_data.get_ohlcv.return_value = _make_candles()
-        market_data.get_current_price.return_value = {'last': 30.00}  # Acima do SL
+        market_data.get_current_price.return_value = {'last': 30.00}
 
         technical.analyze.return_value = TechnicalResult(signal=TrendSignal.NEUTRAL, ema_9=0.0, ema_21=0.0, ema_50=0.0, rsi=50.0, support=0.0, resistance=0.0, confidence=0.3, reasoning='Sem sinais claros')
         sentiment.get_sentiment_for_ticker.return_value = SentimentResult(score=0.0, label='POS', confidence=1.0, news_count=1, top_headline='', reasoning='')
@@ -247,7 +237,6 @@ class TestEmergencySellOnStopLoss:
 
         assert decision.action != Action.EMERGENCY_SELL
 
-
 class TestNoBuyInsufficientCapital:
     """Testes para bloqueio de compra com capital insuficiente."""
 
@@ -257,7 +246,7 @@ class TestNoBuyInsufficientCapital:
     ) -> None:
         """Deve retornar HOLD quando capital é insuficiente para compra."""
         market_data.get_ohlcv.return_value = _make_candles()
-        market_data.get_current_price.return_value = {'last': 30.00}  # Muito caro
+        market_data.get_current_price.return_value = {'last': 30.00}
 
         technical.analyze.return_value = TechnicalResult(signal=TrendSignal.BUY, ema_9=0.0, ema_21=0.0, ema_50=0.0, rsi=50.0, support=0.0, resistance=0.0, confidence=0.9, reasoning='Sinal muito forte de compra')
 
@@ -267,7 +256,7 @@ class TestNoBuyInsufficientCapital:
 
         decision = engine.evaluate(
             ticker='WEGE3',
-            news_items=[]  # Capital insuficiente
+            news_items=[]
         )
 
         assert decision.action == Action.HOLD
@@ -293,7 +282,6 @@ class TestNoBuyInsufficientCapital:
         )
 
         assert decision.action == Action.HOLD
-
 
 class TestMissingData:
     """Testes para cenários com dados indisponíveis."""

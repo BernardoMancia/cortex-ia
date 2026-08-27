@@ -35,7 +35,6 @@ from data.news_scraper import NewsScraper
 
 logger = logging.getLogger('cortex.engine')
 
-
 class CortexEngine:
     """
     Motor principal do Projeto Córtex — orquestrador central.
@@ -58,13 +57,11 @@ class CortexEngine:
             verbose: Se True, ativa logging em nível DEBUG.
             single_cycle: Se True, executa apenas um ciclo e para.
         """
-        # ── Configuração ─────────────────────────────────────────────────
         self.settings = Settings(
             simulation_mode=force_simulation if force_simulation else None,
             verbose=verbose,
         )
 
-        # ── Logging ──────────────────────────────────────────────────────
         setup_logger('cortex', verbose=verbose)
         logger.info('═══════════════════════════════════════════════════')
         logger.info('   PROJETO CÓRTEX — Inicialização')
@@ -73,13 +70,10 @@ class CortexEngine:
         logger.info('Capital inicial: R$ %.2f', self.settings.capital_inicial)
         logger.info('Stop-loss: %.1f%%', self.settings.stop_loss_percent * 100)
 
-        # ── Banco de Dados ───────────────────────────────────────────────
         self.db = DatabaseManager(self.settings.db_path)
 
-        # ── Dados de Mercado ─────────────────────────────────────────────
         self.market_data = MarketData()
 
-        # ── Broker ───────────────────────────────────────────────────────
         if self.settings.simulation_mode or force_simulation:
             self.broker: BaseBroker = SimulatorBroker(
                 initial_balance=self.settings.capital_inicial
@@ -96,14 +90,11 @@ class CortexEngine:
                     initial_balance=self.settings.capital_inicial
                 )
 
-        # ── Portfólio ────────────────────────────────────────────────────
         self.portfolio = Portfolio(initial_capital=self.settings.capital_inicial)
 
-        # ── Análise ──────────────────────────────────────────────────────
         self.technical = TechnicalAnalyzer()
         self.sentiment = SentimentAnalyzer(mode=self.settings.SENTIMENT_MODE)
 
-        # ── Risco (deve ser criado antes do DecisionEngine) ──────────
         self.risk_manager = RiskManager(
             stop_loss_percent=self.settings.stop_loss_percent
         )
@@ -117,13 +108,10 @@ class CortexEngine:
             db=self.db,
         )
 
-        # ── Scheduler ────────────────────────────────────────────────────
         self.scheduler = MarketScheduler()
 
-        # ── Scraping ─────────────────────────────────────────────────────
         self.news_scraper = NewsScraper()
 
-        # ── Notificações ─────────────────────────────────────────────────
         self.telegram = TelegramNotifier(
             token=self.settings.TELEGRAM_TOKEN,
             chat_id=self.settings.TELEGRAM_CHAT_ID,
@@ -131,7 +119,6 @@ class CortexEngine:
             channel_id=self.settings.TELEGRAM_CHANNEL_ID,
         )
 
-        # ── Monitoramento ────────────────────────────────────────────────
         self.health_monitor = HealthMonitor(
             telegram=self.telegram,
             db=self.db,
@@ -139,22 +126,19 @@ class CortexEngine:
             alert_cooldown=self.settings.alert_cooldown,
         )
 
-        # ── Estado do Dashboard ──────────────────────────────────────────
         self.dashboard_state = WebDashboardState()
 
-        # ── Servidor Dashboard ───────────────────────────────────────────
         self.dashboard_server = DashboardServer(
             self.dashboard_state,
             host=getattr(self.settings, 'DASHBOARD_HOST', getattr(self.settings, 'dashboard_host', '0.0.0.0')),
             port=getattr(self.settings, 'DASHBOARD_PORT', getattr(self.settings, 'dashboard_port', 8003)),
         )
 
-        # ── Flags de Controle ────────────────────────────────────────────
         self.running: bool = False
         self.single_cycle: bool = single_cycle
         self.last_cycle_time: Optional[datetime] = None
         self._start_time: Optional[datetime] = None
-        self._last_error_alert: dict[str, float] = {}  # cooldown por erro
+        self._last_error_alert: dict[str, float] = {}
         self._opening_alert_sent_today: bool = False
         self._closing_report_sent_today: bool = False
         self._was_market_open: bool = False
@@ -175,19 +159,15 @@ class CortexEngine:
         """
         logger.info('Córtex iniciando...')
 
-        # Conectar broker
         if not self.broker.connect():
             logger.error('Falha ao conectar broker — abortando')
             raise RuntimeError('Falha ao conectar broker')
         logger.info('Broker conectado')
 
-        # Sincronizar estado do portfólio em memória com as posições reais do broker
         self._sync_portfolio_with_broker()
 
-        # Banco de dados já inicializado no __init__
         logger.info('Banco de dados pronto')
 
-        # Carregar modelo NLP se modo 'full' ativo
         if self.sentiment.mode == 'full':
             logger.info('Carregando modelo NLP (FinBERT)...')
             try:
@@ -196,15 +176,12 @@ class CortexEngine:
             except ImportError:
                 logger.warning('Modelo NLP não disponível — usando análise por keywords')
 
-        # Flags de controle
         self.running = True
         self._start_time = datetime.now(BRT)
 
-        # Iniciar monitoramento de saúde
         self.health_monitor.start_daemon()
 
         market_open = self.scheduler.is_market_open()
-        # Iniciar Dashboard Web em background
         try:
             self.dashboard_server.start()
             logger.info(
@@ -217,18 +194,15 @@ class CortexEngine:
 
         logger.info('Daemon de monitoramento iniciado')
 
-        # Iniciar polling interativo do Telegram
         self._register_telegram_commands()
         self.telegram.start_polling()
 
-        # Registrar signal handlers
         self._register_signal_handlers()
 
         logger.info('═══════════════════════════════════════════════════')
         logger.info('   CÓRTEX OPERACIONAL')
         logger.info('═══════════════════════════════════════════════════')
 
-        # Enviar aviso de inicialização
         mode_str = "Simulação" if self.settings.simulation_mode else "PRODUÇÃO"
         self.telegram.send_to_channel(f"🚀 *Córtex Iniciado!*\nModo: {mode_str}\nStatus: Operacional")
 
@@ -246,23 +220,18 @@ class CortexEngine:
 
         while self.running:
             try:
-                # Verificação de saúde
                 self.health_monitor.check()
 
-                # Resetar flags diárias
                 self._reset_daily_flags()
 
                 if self.scheduler.is_market_open():
                     self._was_market_open = True
 
-                    # Enviar alerta de abertura uma vez por dia
                     if not self._opening_alert_sent_today:
                         self._send_opening_alert()
 
-                    # Executar ciclo de trading
                     self._run_trading_cycle()
 
-                    # Modo single-cycle: executar uma vez e parar
                     if self.single_cycle:
                         logger.info('Modo single-cycle — encerrando')
                         self.stop()
@@ -271,7 +240,6 @@ class CortexEngine:
                     time_module.sleep(self.settings.trading_cycle_interval)
 
                 else:
-                    # Mercado fechado
                     if (
                         self._was_market_open
                         and not self._closing_report_sent_today
@@ -279,11 +247,9 @@ class CortexEngine:
                         self._send_closing_report()
                         self._was_market_open = False
 
-                    # Manutenção
                     if self.scheduler.should_run_maintenance():
                         self._run_maintenance()
 
-                    # Modo single-cycle fora do mercado
                     if self.single_cycle:
                         logger.info('Modo single-cycle (mercado fechado) — encerrando')
                         self.stop()
@@ -298,11 +264,10 @@ class CortexEngine:
 
             except Exception as e:
                 logger.error('Erro no loop principal: %s', e, exc_info=True)
-                # Cooldown de 15 min por mensagem de erro para não spammar Telegram
                 error_key = str(e)[:80]
                 now = time_module.time()
                 last_sent = self._last_error_alert.get(error_key, 0)
-                if now - last_sent > 900:  # 15 minutos
+                if now - last_sent > 900:
                     self.telegram.send_alert(f'🚨 ERRO: {e}')
                     self._last_error_alert[error_key] = now
                 time_module.sleep(self.settings.trading_cycle_interval)
@@ -322,13 +287,11 @@ class CortexEngine:
         cycle_start = datetime.now(BRT)
         logger.info('─── Início do ciclo de trading ───')
 
-        # 1. Sincronizar com broker e atualizar preços
         self._sync_portfolio_with_broker()
         prices = self.market_data.update_prices(self.settings.watchlist)
         self.portfolio.update_prices(prices)
         logger.debug('Preços atualizados para %d ativos', len(prices))
 
-        # 2. STOP-LOSS — MÁXIMA PRIORIDADE
         positions = self.portfolio.positions
         if positions:
             triggered = self.risk_manager.check_stop_loss_triggers(
@@ -359,7 +322,6 @@ class CortexEngine:
                     )
                     self.telegram.send_emergency_alert(position.ticker, reason)
 
-            # TAKE-PROFIT PARCIAL
             tp_triggered = self.risk_manager.check_take_profit_triggers(positions)
             for position in tp_triggered:
                 logger.info('🎯 Executando realização parcial: %s', position.ticker)
@@ -368,7 +330,6 @@ class CortexEngine:
                 if trade is not None and trade.status == OrderStatus.FILLED:
                     self.portfolio.reduce_position(position.ticker, trade.price, trade.quantity)
                     position.partial_exit_done = True
-                    # Subir stop para o breakeven
                     position.stop_loss = position.entry_price
                     self.db.insert_trade(
                         ticker=trade.ticker,
@@ -384,11 +345,9 @@ class CortexEngine:
                         f'Stop-loss restante ajustado para breakeven (R$ {position.stop_loss:.2f}).'
                     )
 
-        # 3. Coletar notícias
         news = self.news_scraper.fetch_all_news()
         logger.debug('Notícias coletadas: %d itens', len(news))
 
-        # 3.1 Persistir notícias no banco de dados (deduplicação por URL)
         for item in news:
             for ticker in (item.tickers_mentioned or [None]):
                 self.db.insert_news(
@@ -399,14 +358,12 @@ class CortexEngine:
                     published_at=item.published_at.isoformat() if item.published_at else None,
                 )
 
-        # 3.2 Pré-carregar cotações e OHLCV em lote paralelo para todo o watchlist
         try:
             self.market_data.get_prices_batch(self.settings.watchlist)
             self.market_data.get_ohlcv_batch(self.settings.watchlist, period="3mo", interval="1d")
         except Exception as exc:
             logger.debug('Falha no pré-carregamento em lote: %s', exc)
 
-        # 4. Avaliar cada ativo do watchlist
         for ticker in self.settings.watchlist:
             try:
                 decision = self.decision_engine.evaluate(
@@ -414,7 +371,6 @@ class CortexEngine:
                     news_items=news,
                 )
 
-                # Registrar decisão no banco
                 self.db.insert_decision(
                     ticker=decision.ticker,
                     action=decision.action.value,
@@ -423,7 +379,6 @@ class CortexEngine:
                     reasoning=decision.reasoning[:500] if decision.reasoning else None,
                 )
 
-                # Manter histórico recente para dashboard
                 self._recent_decisions.append({
                     'ticker': decision.ticker,
                     'action': decision.action.value,
@@ -431,10 +386,8 @@ class CortexEngine:
                     'reasoning': (decision.reasoning[:200] if decision.reasoning else ''),
                     'timestamp': decision.timestamp.isoformat(),
                 })
-                # Manter apenas as 50 decisões mais recentes
                 self._recent_decisions = self._recent_decisions[-50:]
 
-                # Executar operação se acionável
                 if decision.action == Action.BUY:
                     self._execute_buy(decision)
                 elif decision.action in (Action.SELL, Action.EMERGENCY_SELL):
@@ -443,7 +396,6 @@ class CortexEngine:
             except Exception as e:
                 logger.error('Erro ao avaliar %s: %s', ticker, e, exc_info=True)
 
-        # 5. Atualizar P&L diário para circuit breaker
         summary = self.portfolio.get_summary()
         self.risk_manager.update_daily_pnl(summary.total_pnl_percent / 100.0)
         if self.risk_manager.is_circuit_breaker_active:
@@ -452,10 +404,8 @@ class CortexEngine:
                 'Operações suspensas até amanhã.'
             )
 
-        # 6. Verificar volatilidade em posições mantidas
         self._check_volatility(self.portfolio.positions)
 
-        # 7. Atualizar estado do dashboard
         self._update_dashboard_state()
 
         self.last_cycle_time = datetime.now(BRT)
@@ -464,12 +414,10 @@ class CortexEngine:
 
     def _execute_buy(self, decision: Decision) -> None:
         """Executa ordem de compra baseada na decisão."""
-        # Verificar circuit breaker antes de operar
         if self.risk_manager.is_circuit_breaker_active:
             logger.warning('Compra de %s bloqueada — circuit breaker ativo', decision.ticker)
             return
 
-        # Validar ordem via RiskManager
         summary = self.portfolio.get_summary()
         is_valid, reason = self.risk_manager.validate_order(
             ticker=decision.ticker,
@@ -492,7 +440,6 @@ class CortexEngine:
         )
 
         if trade is not None and trade.status == OrderStatus.FILLED:
-            # Adicionar posição ao portfólio
             position = Position(
                 ticker=decision.ticker,
                 quantity=decision.quantity,
@@ -557,7 +504,6 @@ class CortexEngine:
 
         for ticker in self.settings.watchlist:
             try:
-                # Pré-carregar dados OHLCV para cache (usado no próximo ciclo de trading)
                 df = self.market_data.get_ohlcv(ticker, period='3mo', interval='1d')
                 if df is not None and not df.empty:
                     last_close = df['Close'].iloc[-1]
@@ -658,7 +604,6 @@ class CortexEngine:
             self._opening_alert_sent_today = False
             self._closing_report_sent_today = False
             self._last_alert_date = today
-            # Resetar limites diários de risco (circuit breaker)
             self.risk_manager.reset_daily_limits()
             logger.debug('Flags diárias resetadas para %s', today)
 
@@ -769,7 +714,6 @@ class CortexEngine:
         except Exception as e:
             logger.error('Erro ao desconectar broker: %s', e)
 
-        # Notificar via Telegram
         self.telegram.send_alert('🔴 Córtex desligando...')
 
         logger.info('═══════════════════════════════════════════════════')
@@ -800,7 +744,6 @@ class CortexEngine:
             signal.signal(signal.SIGTERM, _handler)
             logger.debug('Signal handlers registrados (SIGINT, SIGTERM)')
         except (OSError, ValueError) as e:
-            # Pode falhar em threads não-principais
             logger.warning('Não foi possível registrar signal handlers: %s', e)
     def _register_telegram_commands(self) -> None:
         """Registra os comandos interativos no Telegram."""
@@ -833,7 +776,6 @@ class CortexEngine:
                     return "🧠 *Pensamentos do Córtex*\n\nAinda não analisei nenhum ativo hoje."
                 
                 msg = "🧠 *Últimas Análises do Córtex*\n\n"
-                # Pega as últimas 5
                 for dec in decisions[:5]:
                     emoji = "🟢" if dec['action'] in ("BUY", "COMPRA") else "🔴" if dec['action'] in ("SELL", "VENDA") else "⚪"
                     msg += f"{emoji} *{dec['ticker']}* ({dec['action']})\n"
