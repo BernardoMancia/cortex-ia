@@ -1,0 +1,121 @@
+# ============================================
+# Projeto Córtex IA — .gitignore de Produção
+# ============================================
+
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+
+# Diretórios Operacionais Locais / Espelho Git / Utilitários Locais
+backups/
+logs/
+GIT/
+scripts/tools/
+
+# Estado Runtime e Dados Sensíveis em data/ (preserva data/*.py!)
+data/*.db
+data/*.db-*
+data/*.db*
+data/*.sqlite*
+data/*.json
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+resumo_chat.json
+test_vps_state_run.py
+
+# Compactados
+*.zip
+*.tar.gz
+*.tar
+*.gz
+*.rar
+*.7z
+
+# Python e Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Distribuição / Build
+dist/
+build/
+*.egg-info/
+*.egg
+*.whl
+*.manifest
+*.spec
+
+# Ambientes Virtuais
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs e Editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# Logs e Saídas de Diagnóstico na Raiz (escopado para não afetar subpastas)
+*.log
+*.log.*
+/*_log.txt
+/*_output.txt
+/*_audit.txt
+/*_result.txt
+/*_status.txt
+/vps_audit_result.txt
+/status.txt
+/ls_home.txt
+/ps_aux.txt
+/db_logs.txt
+/grep_*.txt
+/engine_log.txt
+/dashboard_log.txt
+/full_engine_log.txt
+!/requirements.txt
+
+# Modelos ML e Pesos
+models/*.onnx
+models/*.pt
+models/*.pth
+models/*.bin
+models/*.h5
+
+# Sistema Operacional
+Thumbs.db
+.DS_Store
+desktop.ini
+ehthumbs.db
+
+# Pytest / Cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+
+# Dados Temporários, Binários MQL5 e Scratch
+*.ex5
+servers.dat
+!docker/servers.dat
+scratch/
+tmp/
+temp/
+*.tmp
+*.bak
+.temp_*

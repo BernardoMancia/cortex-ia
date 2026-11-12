@@ -1,0 +1,35 @@
+services:
+  mt5-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: mt5-bridge
+    hostname: cortex-mt5-bridge
+    init: true
+    env_file:
+      - ../.env
+    ports:
+      - "127.0.0.1:5000:5000" # MT5 REST Bridge API (estritamente loopback na VPS)
+      - "127.0.0.1:6080:6080" # Diagnóstico Web VNC / noVNC (loopback; ativo apenas se VNC_PASSWORD estiver definida)
+    volumes:
+      - mt5_data:/root/.wine/drive_c/Program Files/MetaTrader 5
+      - mt5_appdata:/root/.wine/drive_c/users/root/AppData/Roaming/MetaQuotes
+    restart: unless-stopped
+    environment:
+      - TZ=America/Sao_Paulo
+      - BRIDGE_HOST=0.0.0.0
+      - BRIDGE_PORT=5000
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS -H \"X-Bridge-Api-Key: $$BRIDGE_API_KEY\" http://127.0.0.1:5000/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+volumes:
+  mt5_data:
+  mt5_appdata:
