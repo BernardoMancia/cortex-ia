@@ -18,14 +18,23 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 from config.settings import settings
 from models.data_models import BRT, Position
-from utils.helpers import normalize_b3_ticker
+from utils.helpers import is_b3_unit_lot_asset, normalize_b3_ticker
 
 logger = logging.getLogger('cortex.risk_manager')
+
+
+def _finite_float(value: Any, default: float) -> float:
+    """Converte `value` em float finito ou retorna `default`."""
+    try:
+        parsed = float(value)
+        return parsed if math.isfinite(parsed) else default
+    except (ValueError, TypeError):
+        return default
 
 
 class RiskManager:
@@ -51,28 +60,52 @@ class RiskManager:
             max_shares: Quantidade máxima por ordem.
             max_concentration: Concentração máxima por ativo (0.25 = 25%).
         """
-        resolved_sl = float(
-            settings.STOP_LOSS_PERCENT if stop_loss_percent is None else stop_loss_percent
-        )
-        resolved_max_pos = int(
-            getattr(settings, 'MAX_POSITIONS', 0) if max_positions is None else max_positions
-        )
-        resolved_daily_loss = float(
+        raw_sl = settings.STOP_LOSS_PERCENT if stop_loss_percent is None else stop_loss_percent
+        resolved_sl = _finite_float(raw_sl, 0.10)
+        if resolved_sl <= 0:
+            resolved_sl = 0.10
+        resolved_sl = max(0.01, min(0.50, resolved_sl))
+
+        raw_max_pos = getattr(settings, 'MAX_POSITIONS', 0) if max_positions is None else max_positions
+        try:
+            resolved_max_pos = max(0, int(raw_max_pos))
+        except (ValueError, TypeError):
+            resolved_max_pos = 0
+
+        raw_daily_loss = (
             getattr(settings, 'MAX_DAILY_LOSS_PERCENT', 0.03)
             if daily_loss_limit is None
             else daily_loss_limit
         )
-        resolved_min_shares = int(
-            getattr(settings, 'min_quantity', 1) if min_shares is None else min_shares
-        )
-        resolved_max_shares = int(
-            getattr(settings, 'max_quantity', 50000) if max_shares is None else max_shares
-        )
-        resolved_concentration = float(
+        resolved_daily_loss = abs(_finite_float(raw_daily_loss, 0.03))
+        if resolved_daily_loss <= 0:
+            resolved_daily_loss = 0.03
+        resolved_daily_loss = max(0.001, min(1.0, resolved_daily_loss))
+
+        raw_min_shares = getattr(settings, 'min_quantity', 1) if min_shares is None else min_shares
+        try:
+            resolved_min_shares = max(1, int(raw_min_shares))
+        except (ValueError, TypeError):
+            resolved_min_shares = 1
+
+        raw_max_shares = getattr(settings, 'max_quantity', 50000) if max_shares is None else max_shares
+        try:
+            resolved_max_shares = max(resolved_min_shares, int(raw_max_shares))
+        except (ValueError, TypeError):
+            resolved_max_shares = max(resolved_min_shares, 50000)
+
+        raw_conc = (
             getattr(settings, 'MAX_CONCENTRATION', 0.25)
             if max_concentration is None
             else max_concentration
         )
+        resolved_concentration = _finite_float(raw_conc, 0.25)
+        if resolved_concentration <= 0:
+            resolved_concentration = 0.25
+        resolved_concentration = max(0.01, min(1.0, resolved_concentration))
+
+        raw_trig = _finite_float(getattr(settings, 'TRAILING_STOP_TRIGGER_PERCENT', 0.02), 0.02)
+        raw_dist = _finite_float(getattr(settings, 'TRAILING_STOP_DISTANCE_PERCENT', 0.015), 0.015)
 
         self.stop_loss_percent: float = resolved_sl
         self.max_positions: int = resolved_max_pos
@@ -80,12 +113,8 @@ class RiskManager:
         self.min_shares: int = resolved_min_shares
         self.max_shares: int = resolved_max_shares
         self.max_concentration: float = resolved_concentration
-        self.trailing_stop_activation: float = float(
-            getattr(settings, 'TRAILING_STOP_TRIGGER_PERCENT', 0.02)
-        )
-        self.trailing_stop_distance: float = float(
-            getattr(settings, 'TRAILING_STOP_DISTANCE_PERCENT', 0.015)
-        )
+        self.trailing_stop_activation: float = max(0.005, min(0.30, raw_trig if raw_trig > 0 else 0.02))
+        self.trailing_stop_distance: float = max(0.005, min(0.20, raw_dist if raw_dist > 0 else 0.015))
         if self.trailing_stop_distance >= self.trailing_stop_activation:
             self.trailing_stop_distance = round(
                 max(0.005, self.trailing_stop_activation * 0.8), 4
@@ -99,7 +128,7 @@ class RiskManager:
 
         self._daily_pnl: float = 0.0
         self._circuit_breaker_active: bool = False
-        self._last_reset_date: Optional[str] = None
+        self._last_reset_date: Optional[date] = None
         pos_desc = f"{self.max_positions}" if self.max_positions > 0 else "Ilimitadas"
         logger.info(
             'RiskManager inicializado — stop-loss: %.1f%%, max posições: %s, '
@@ -109,6 +138,34 @@ class RiskManager:
             self.max_concentration * 100,
             self.daily_loss_limit * 100,
         )
+
+    def calculate_partial_tp_quantity(
+        self,
+        position: Position,
+        simulation_mode: bool | None = None,
+    ) -> int:
+        """
+        Calcula a quantidade para realização parcial (~50%) respeitando a granularidade
+        de lotes padrão (`100x`) e fracionários (`1..99`) da B3 em Produção.
+
+        Em Produção (`not simulation_mode`), se o ativo operar em lote padrão de 100 e a
+        custódia for exatamente 1 lote padrão (`100 <= qty < 200` com `qty % 100 == 0`),
+        retorna `0` para sinalizar proteção de breakeven sem dividir o lote em mercado
+        fracionário separado.
+        """
+        qty = int(getattr(position, 'quantity', 0) or 0)
+        if qty < 2:
+            return 0
+
+        is_sim = bool(
+            settings.SIMULATION_MODE if simulation_mode is None else simulation_mode
+        )
+        if is_sim or is_b3_unit_lot_asset(position.ticker) or qty < 100:
+            return max(1, qty // 2)
+
+        frac_rem = qty % 100
+        target_half = qty // 2
+        return (target_half // 100) * 100 + min(frac_rem, target_half % 100)
 
     def check_take_profit_triggers(self, positions: list[Position]) -> list[Position]:
         """
@@ -146,12 +203,12 @@ class RiskManager:
 
         Garante distância mínima de segurança mesmo quando o ATR está muito comprimido.
         """
-        if entry_price <= 0:
+        if not math.isfinite(float(entry_price)) or entry_price <= 0:
             return 0.0
 
         fixed_stop = entry_price * (1.0 - self.stop_loss_percent)
 
-        if atr is not None and atr > 0:
+        if atr is not None and math.isfinite(float(atr)) and atr > 0:
             min_dist_pct = min(self.stop_loss_percent, max(0.01, self.trailing_stop_distance))
             min_distance_price = entry_price * (1.0 - min_dist_pct)
             atr_stop = min(entry_price - (1.5 * atr), min_distance_price)
@@ -167,15 +224,22 @@ class RiskManager:
                 entry_price, stop_price, self.stop_loss_percent * 100,
             )
 
-        return round(max(0.0, stop_price), 2)
+        rounded_stop = round(max(0.0, stop_price), 2)
+        if entry_price > 0.01:
+            rounded_stop = min(rounded_stop, round(entry_price - 0.01, 2))
+        return max(0.0, rounded_stop)
 
     def update_trailing_stop(self, position: Position) -> bool:
         """
         Atualiza stop-loss com trailing stop quando a posição supera o gatilho de lucro.
+        Garante que `new_stop` fique estritamente ao menos R$ 0,01 abaixo de `current_price`
+        para jamais disparar auto-stop imediato em penny stocks (`[RSK-02]`).
         """
         if (
             position.current_price is None
+            or not math.isfinite(float(position.current_price))
             or position.current_price <= 0
+            or not math.isfinite(float(position.entry_price))
             or position.entry_price <= 0
         ):
             return False
@@ -185,7 +249,12 @@ class RiskManager:
         if gain_pct < self.TRAILING_STOP_ACTIVATION:
             return False
 
-        new_stop = round(position.current_price * (1.0 - self.trailing_stop_distance), 2)
+        raw_stop = math.floor(
+            position.current_price * (1.0 - self.trailing_stop_distance) * 100.0 + 1e-9
+        ) / 100.0
+        new_stop = round(min(raw_stop, round(position.current_price - 0.01, 2)), 2)
+        if new_stop <= 0:
+            return False
 
         if new_stop > position.stop_loss:
             old_stop = position.stop_loss
@@ -502,22 +571,50 @@ class RiskManager:
         )
         return result
 
+    @staticmethod
+    def _normalize_reset_date(val: Any) -> Optional[date]:
+        """Converte `date`, `datetime` ou string ISO em `date` BRT."""
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val.astimezone(BRT).date() if val.tzinfo else val.date()
+        if isinstance(val, date):
+            return val
+        if isinstance(val, str):
+            try:
+                return date.fromisoformat(val.strip()[:10])
+            except ValueError:
+                return None
+        return None
+
+    def restore_daily_state(
+        self,
+        daily_pnl: float,
+        circuit_breaker_active: bool,
+        reset_date: Any = None,
+    ) -> None:
+        """Restaura estado diário de P&L e Circuit Breaker ao alternar entre ambientes."""
+        self._daily_pnl = _finite_float(daily_pnl, 0.0)
+        self._circuit_breaker_active = bool(circuit_breaker_active)
+        self._last_reset_date = self._normalize_reset_date(reset_date) or datetime.now(BRT).date()
+
     def update_daily_pnl(self, pnl_percent: float) -> None:
         """Atualiza o P&L diário e verifica o circuit breaker."""
-        today = datetime.now(BRT).strftime('%Y-%m-%d')
-        if self._last_reset_date != today:
+        today = datetime.now(BRT).date()
+        if self._normalize_reset_date(self._last_reset_date) != today:
             self._daily_pnl = 0.0
             self._circuit_breaker_active = False
             self._last_reset_date = today
 
-        self._daily_pnl = pnl_percent
+        safe_pnl = _finite_float(pnl_percent, 0.0)
+        self._daily_pnl = safe_pnl
 
-        if pnl_percent <= self.DAILY_LOSS_LIMIT and not self._circuit_breaker_active:
+        if safe_pnl <= self.DAILY_LOSS_LIMIT and not self._circuit_breaker_active:
             self._circuit_breaker_active = True
             logger.warning(
                 '🛑 CIRCUIT BREAKER ATIVADO — Perda diária de %.1f%% '
                 'excede limite de %.1f%%. Operações suspensas até amanhã.',
-                pnl_percent * 100,
+                safe_pnl * 100,
                 self.DAILY_LOSS_LIMIT * 100,
             )
 
@@ -525,7 +622,7 @@ class RiskManager:
         """Reseta limites diários (chamado no início de cada dia ou troca de ambiente)."""
         self._daily_pnl = 0.0
         self._circuit_breaker_active = False
-        self._last_reset_date = datetime.now(BRT).strftime('%Y-%m-%d')
+        self._last_reset_date = datetime.now(BRT).date()
         logger.debug('Limites diários de risco resetados')
 
     @property
@@ -541,12 +638,15 @@ class RiskManager:
     ) -> None:
         """Atualiza dinamicamente parâmetros de risco garantindo `trailing_distance < trailing_trigger`."""
         if stop_loss_percent is not None:
-            self.stop_loss_percent = max(0.01, min(0.50, float(stop_loss_percent)))
+            cand_sl = _finite_float(stop_loss_percent, self.stop_loss_percent)
+            self.stop_loss_percent = max(0.01, min(0.50, cand_sl))
         if trailing_trigger_percent is not None:
-            self.trailing_stop_activation = max(0.005, min(0.30, float(trailing_trigger_percent)))
+            cand_trig = _finite_float(trailing_trigger_percent, self.trailing_stop_activation)
+            self.trailing_stop_activation = max(0.005, min(0.30, cand_trig))
             self.TRAILING_STOP_ACTIVATION = self.trailing_stop_activation
         if trailing_distance_percent is not None:
-            self.trailing_stop_distance = max(0.005, min(0.20, float(trailing_distance_percent)))
+            cand_dist = _finite_float(trailing_distance_percent, self.trailing_stop_distance)
+            self.trailing_stop_distance = max(0.005, min(0.20, cand_dist))
 
         if self.trailing_stop_distance >= self.trailing_stop_activation:
             self.trailing_stop_distance = round(
@@ -565,15 +665,29 @@ class RiskManager:
         positions: list[Position],
         target_amount: float,
         market_data: Any = None,
+        exclude_same_day_profit: bool = False,
+        simulation_mode: bool | None = None,
     ) -> list[dict[str, Any]]:
         """
-        Seleciona posições priorizando maior ganho percentual e menor volume necessário
-        para levantar `target_amount`.
+        Seleciona posições priorizando posições `D+1+` (quando `AVOID_DAY_TRADE_TAX=True`),
+        maior ganho percentual e menor volume necessário para levantar `target_amount`,
+        descontando emolumentos B3 e respeitando lotes padrão (`100x`) vs fracionários em Produção.
         """
-        if target_amount <= 0 or not positions:
+        if not math.isfinite(float(target_amount)) or target_amount <= 0 or not positions:
             return []
 
-        scored_positions: list[tuple[float, float, Position]] = []
+        is_sim = bool(
+            settings.SIMULATION_MODE if simulation_mode is None else simulation_mode
+        )
+        fee_rate = (
+            max(0.0, _finite_float(getattr(settings, "B3_FEE_RATE", 0.0003), 0.0003))
+            if not is_sim
+            else 0.0
+        )
+        avoid_dt = bool(getattr(settings, "AVOID_DAY_TRADE_TAX", True))
+        today_brt = datetime.now(BRT).date()
+
+        scored_positions: list[tuple[int, float, float, Position]] = []
         for pos in positions:
             price = float(pos.current_price or 0.0)
             if price <= 0 and market_data is not None and hasattr(market_data, 'get_current_price'):
@@ -587,27 +701,55 @@ class RiskManager:
                     price = 0.0
             if price <= 0:
                 price = float(pos.entry_price or 0.0)
-            if price <= 0 or pos.quantity <= 0:
+            if not math.isfinite(price) or price <= 0 or pos.quantity <= 0:
                 continue
-            gain_pct = (price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0.0
-            scored_positions.append((gain_pct, price, pos))
 
-        scored_positions.sort(key=lambda item: item[0], reverse=True)
+            gain_pct = (price - pos.entry_price) / pos.entry_price if pos.entry_price > 0 else 0.0
+            entry_dt = getattr(pos, 'entry_time', None) or getattr(pos, 'timestamp', None)
+            if isinstance(entry_dt, datetime):
+                pos_date = entry_dt.astimezone(BRT).date() if entry_dt.tzinfo else entry_dt.date()
+                is_same_day = (pos_date == today_brt)
+            else:
+                is_same_day = False
+
+            if exclude_same_day_profit and avoid_dt and is_same_day and gain_pct > 0:
+                continue
+
+            day_trade_bucket = 1 if (avoid_dt and is_same_day) else 0
+            scored_positions.append((day_trade_bucket, gain_pct, price, pos))
+
+        scored_positions.sort(key=lambda item: (item[0], -item[1]))
 
         plan: list[dict[str, Any]] = []
-        remaining_needed = target_amount
+        remaining_needed = float(target_amount)
 
-        for gain_pct, price, pos in scored_positions:
+        for _, gain_pct, price, pos in scored_positions:
             if remaining_needed <= 0.01:
                 break
 
-            val_total_pos = price * pos.quantity
+            net_unit_price = price * (1.0 - fee_rate) if fee_rate > 0 else price
+            if net_unit_price <= 0:
+                continue
+
+            val_total_pos = net_unit_price * pos.quantity
             if val_total_pos <= remaining_needed:
                 qty_to_sell = pos.quantity
             else:
-                qty_to_sell = min(pos.quantity, max(1, math.ceil(remaining_needed / price)))
+                raw_qty = min(
+                    pos.quantity,
+                    max(1, math.ceil((remaining_needed - 1e-9) / net_unit_price)),
+                )
+                if (
+                    not is_sim
+                    and not is_b3_unit_lot_asset(pos.ticker)
+                    and pos.quantity >= 100
+                    and (raw_qty % 100) > (pos.quantity % 100)
+                ):
+                    qty_to_sell = min(pos.quantity, ((raw_qty // 100) + 1) * 100)
+                else:
+                    qty_to_sell = raw_qty
 
-            est_value = qty_to_sell * price
+            est_value = qty_to_sell * net_unit_price
             remaining_needed -= est_value
 
             plan.append({

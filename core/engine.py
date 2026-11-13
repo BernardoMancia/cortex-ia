@@ -8,12 +8,15 @@ de risco, notificações, controle de concorrência e monitoramento de saúde.
 
 from __future__ import annotations
 
+import html
 import inspect
+import json
 import logging
 import platform
 import signal
 import threading
 import time as time_module
+from dataclasses import replace as dc_replace
 from datetime import date, datetime, time
 from typing import Any, Callable, Optional
 
@@ -34,7 +37,7 @@ from monitoring.health import HealthMonitor
 from notifications.telegram import TelegramNotifier
 from portfolio import Portfolio
 from utils.helpers import BRT, normalize_b3_ticker
-from utils.logger import get_logger, setup_logger
+from utils.logger import flush_log_handlers, get_logger, setup_logger
 
 logger = get_logger('cortex.engine')
 
@@ -83,6 +86,8 @@ class CortexEngine:
         """
         self._engine_lock = threading.RLock()
         self._stop_event = threading.Event()
+        self._stop_requested: bool = False
+        self._stop_signal_num: Optional[int] = None
         self._stopped: bool = False
 
         self.settings = Settings(
@@ -137,15 +142,15 @@ class CortexEngine:
             self.db.get_config("sim_initial_capital", str(self.settings.CAPITAL_INICIAL))
         )
         self.settings.CAPITAL_INICIAL = sim_cap
-        self.sim_portfolio = Portfolio(initial_capital=sim_cap)
+        self.sim_portfolio = Portfolio(initial_capital=sim_cap, is_simulated=True)
         self.sim_broker = SimulatorBroker(initial_balance=sim_cap)
 
         prod_ai_cap = float(self.db.get_config("prod_ai_allocated_capital", "0.0"))
         prod_vault = float(self.db.get_config("prod_vault_reserve_cash", "0.0"))
         prod_bal_cfg = self.db.get_config("prod_broker_account_balance")
         prod_free_init = float(prod_bal_cfg) if prod_bal_cfg is not None else (prod_ai_cap + prod_vault)
-        self.prod_portfolio = Portfolio(initial_capital=prod_ai_cap)
-        self.prod_portfolio.free_cash = max(0.0, prod_free_init)
+        self.prod_portfolio = Portfolio(initial_capital=prod_ai_cap, is_simulated=False)
+        self.prod_portfolio.set_free_cash(max(0.0, prod_free_init))
         self.prod_portfolio.ai_allocated_capital = max(0.0, prod_ai_cap)
         self.prod_portfolio.vault_reserve_cash = max(0.0, prod_vault)
 
@@ -256,6 +261,10 @@ class CortexEngine:
             "homologation": 0.0,
             "production": 0.0,
         }
+        self._sold_today_by_env: dict[str, set[str]] = {
+            "homologation": set(),
+            "production": set(),
+        }
         self._next_prod_broker_probe_ts: float = 0.0
 
         logger.info('Todos os componentes inicializados')
@@ -294,23 +303,42 @@ class CortexEngine:
     def request_stop(self, sig: Optional[int] = None) -> None:
         """
         Sinaliza parada do loop principal de forma segura para signal handlers,
-        sem adquirir locks pesados ou abortar operações em andamento.
+        sem adquirir locks pesados, tocar atributos privados de `Event` ou abortar ordens.
         """
         if sig is not None:
-            try:
-                signame = signal.Signals(sig).name
-            except ValueError:
-                signame = str(sig)
-            logger.info('Sinal %s recebido — parada graciosa solicitada', signame)
-
+            self._stop_signal_num = sig
+        self._stop_requested = True
         self.running = False
-        self._stop_event._flag = True  # type: ignore[attr-defined]
-        cond = getattr(self._stop_event, '_cond', None)
-        if cond is not None and cond.acquire(blocking=False):
-            try:
-                cond.notify_all()
-            finally:
-                cond.release()
+
+    def _is_stop_requested(self) -> bool:
+        """Verifica solicitação de parada e sincroniza `_stop_event` fora do signal frame."""
+        if self._stop_requested or self._stop_event.is_set():
+            if self._stop_requested and not self._stop_event.is_set():
+                if self._stop_signal_num is not None:
+                    sig = self._stop_signal_num
+                    self._stop_signal_num = None
+                    try:
+                        signame = signal.Signals(sig).name
+                    except ValueError:
+                        signame = str(sig)
+                    logger.info('Sinal %s recebido — parada graciosa solicitada', signame)
+                self._stop_event.set()
+            return True
+        return False
+
+    def _wait_interruptible(self, timeout_sec: float) -> bool:
+        """
+        Aguarda até `timeout_sec` em fatias curtas verificando `_stop_requested` e `_stop_event`.
+        Retorna True caso a parada tenha sido solicitada.
+        """
+        deadline = time_module.monotonic() + max(0.0, float(timeout_sec))
+        while True:
+            if self._is_stop_requested() or not self.running:
+                return True
+            remaining = deadline - time_module.monotonic()
+            if remaining <= 0:
+                return False
+            self._stop_event.wait(timeout=min(1.0, remaining))
 
     def start(self) -> None:
         """
@@ -322,8 +350,16 @@ class CortexEngine:
         5. Registra handlers de sinal não-bloqueantes.
         """
         logger.info('Córtex iniciando...')
-        self._stopped = False
+        if self._stopped:
+            self._stopped = False
+            self._stop_requested = False
+            self._stop_signal_num = None
         self._stop_event.clear()
+
+        if self._is_stop_requested():
+            logger.info('Parada solicitada antes da inicialização — abortando start().')
+            self.stop(graceful=True)
+            return
 
         if not self.settings.simulation_mode:
             connected = False
@@ -352,6 +388,11 @@ class CortexEngine:
 
         logger.info('Broker conectado (%s)', self.broker.__class__.__name__)
 
+        if self._is_stop_requested():
+            logger.info('Parada solicitada durante conexão do broker — abortando start().')
+            self.stop(graceful=True)
+            return
+
         self._sync_portfolio_with_broker()
         logger.info('Banco de dados e carteira sincronizados')
 
@@ -362,6 +403,11 @@ class CortexEngine:
                 logger.info('Modelo NLP carregado')
             except ImportError:
                 logger.warning('Modelo NLP não disponível — usando análise por keywords')
+
+        if self._is_stop_requested():
+            logger.info('Parada solicitada durante inicialização — abortando start().')
+            self.stop(graceful=True)
+            return
 
         self.running = True
         self._start_time = datetime.now(BRT)
@@ -440,12 +486,12 @@ class CortexEngine:
 
     def run(self) -> None:
         """
-        Loop principal do sistema com espera responsiva por evento (`_stop_event.wait`)
+        Loop principal do sistema com espera responsiva (`_wait_interruptible`)
         e encerramento gracioso garantido ao sair do loop.
         """
         logger.info('Entrando no loop principal')
 
-        while self.running and not self._stop_event.is_set():
+        while self.running and not self._is_stop_requested():
             try:
                 self.health_monitor.check()
                 self._reset_daily_flags()
@@ -462,7 +508,7 @@ class CortexEngine:
                         logger.info('Modo single-cycle — encerrando')
                         break
 
-                    self._stop_event.wait(timeout=float(self.settings.trading_cycle_interval))
+                    self._wait_interruptible(float(self.settings.trading_cycle_interval))
 
                 else:
                     if (
@@ -491,7 +537,7 @@ class CortexEngine:
                         logger.info('Modo single-cycle (mercado fechado) — encerrando')
                         break
 
-                    self._stop_event.wait(timeout=float(self.settings.closed_check_interval))
+                    self._wait_interruptible(float(self.settings.closed_check_interval))
 
             except KeyboardInterrupt:
                 logger.info('Interrupção do teclado recebida no loop principal')
@@ -508,7 +554,7 @@ class CortexEngine:
                     except Exception:
                         pass
                     self._last_error_alert[error_key] = now
-                self._stop_event.wait(timeout=float(self.settings.trading_cycle_interval))
+                self._wait_interruptible(float(self.settings.trading_cycle_interval))
 
         self.stop(graceful=True)
 
@@ -551,6 +597,88 @@ class CortexEngine:
         ref_date = now_brt.astimezone(BRT).date() if now_brt.tzinfo else now_brt.date()
         return pos_date == ref_date
 
+    def _mark_sold_today(self, ticker: str, is_simulated: Optional[bool] = None) -> None:
+        """Registra em memória que `ticker` teve venda executada hoje no ambiente correspondente."""
+        norm = normalize_b3_ticker(ticker)
+        if not norm:
+            return
+        sim_flag = self.settings.simulation_mode if is_simulated is None else bool(is_simulated)
+        env_key = "homologation" if sim_flag else "production"
+        self._sold_today_by_env.setdefault(env_key, set()).add(norm)
+
+    def _load_prod_partial_exit_map(self) -> dict[str, bool]:
+        """Carrega mapa JSON `prod_partial_exit_done` persistido em `system_config`."""
+        try:
+            raw = self.db.get_config("prod_partial_exit_done")
+            if not raw:
+                return {}
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {
+                    normalize_b3_ticker(str(k)): True
+                    for k, v in parsed.items()
+                    if v and normalize_b3_ticker(str(k))
+                }
+        except Exception:
+            pass
+        return {}
+
+    def _save_prod_partial_exit_map(self, mapping: dict[str, bool]) -> None:
+        """Persiste mapa JSON `prod_partial_exit_done` em `system_config`."""
+        try:
+            clean = {
+                normalize_b3_ticker(k): True
+                for k, v in sorted(mapping.items())
+                if v and normalize_b3_ticker(k)
+            }
+            self.db.set_config("prod_partial_exit_done", json.dumps(clean))
+        except Exception as exc:
+            logger.debug("Aviso ao persistir prod_partial_exit_done: %s", exc)
+
+    def _set_prod_partial_exit_flag(self, ticker: str, done: bool) -> None:
+        """Atualiza flag persistida de realização parcial de `ticker` em Produção."""
+        if self.settings.simulation_mode:
+            return
+        norm = normalize_b3_ticker(ticker)
+        if not norm:
+            return
+        current = self._load_prod_partial_exit_map()
+        if done:
+            if not current.get(norm):
+                current[norm] = True
+                self._save_prod_partial_exit_map(current)
+        elif norm in current:
+            current.pop(norm, None)
+            self._save_prod_partial_exit_map(current)
+
+    def _set_start_of_day_baseline(
+        self,
+        env_key: str,
+        portfolio: Portfolio,
+        equity_val: Optional[float],
+    ) -> None:
+        """Define o baseline diário de patrimônio do ambiente sincronizando o acumulador manual."""
+        self._start_of_day_equity[env_key] = (
+            float(equity_val) if (equity_val is not None and equity_val > 0) else None
+        )
+        portfolio._cb_synced_manual_delta = float(  # type: ignore[attr-defined]
+            getattr(portfolio, "_manual_capital_delta_accum", 0.0) or 0.0
+        )
+
+    def _sync_manual_capital_delta_to_sod(self, env_key: str, portfolio: Portfolio) -> None:
+        """
+        Ajusta `_start_of_day_equity[env_key]` por movimentações manuais entre Cofre e IA
+        para que aportes/saques manuais jamais disparem falso Circuit Breaker (`[ENG-12]`).
+        """
+        curr_accum = float(getattr(portfolio, "_manual_capital_delta_accum", 0.0) or 0.0)
+        synced_accum = float(getattr(portfolio, "_cb_synced_manual_delta", curr_accum) or 0.0)
+        delta = curr_accum - synced_accum
+        portfolio._cb_synced_manual_delta = curr_accum  # type: ignore[attr-defined]
+        sod = self._start_of_day_equity.get(env_key)
+        if sod is not None and sod > 0 and abs(delta) > 1e-9:
+            new_sod = sod + delta
+            self._start_of_day_equity[env_key] = new_sod if new_sod > 0 else None
+
     def _record_production_realized_pnl(
         self,
         ticker: str,
@@ -559,6 +687,7 @@ class CortexEngine:
         entry_price: float = 0.0,
         exit_price: float = 0.0,
         quantity: int = 0,
+        force_production: bool = False,
     ) -> float:
         """
         Persiste auto-compounding líquido de taxas B3 da Produção no banco e registra
@@ -572,12 +701,12 @@ class CortexEngine:
         )
         net_pnl = round(float(pnl) - b3_fee, 2)
 
-        if self.settings.simulation_mode:
+        if self.settings.simulation_mode and not force_production:
             return net_pnl
 
         with self.prod_portfolio._lock:
             if b3_fee > 0:
-                self.prod_portfolio.free_cash = max(0.0, self.prod_portfolio.free_cash - b3_fee)
+                self.prod_portfolio.set_free_cash(max(0.0, self.prod_portfolio.free_cash - b3_fee))
                 self.prod_portfolio.cumulative_realized_pnl -= b3_fee
                 self.prod_portfolio.ai_allocated_capital = max(
                     0.0, self.prod_portfolio.ai_allocated_capital - b3_fee
@@ -613,23 +742,23 @@ class CortexEngine:
         """
         Avalia P&L diário isolado por ambiente e envia alerta de Circuit Breaker
         apenas uma vez por transição de ativação no dia.
+        Em Produção, usa exclusivamente `operational_value` (jamais `total_value`).
         """
         is_sim = self.settings.simulation_mode
         env_key = "homologation" if is_sim else "production"
-        current_eq = (
-            self.portfolio.total_value
-            if is_sim
-            else (
-                self.portfolio.operational_value
-                if self.portfolio.operational_value > 0
-                else self.portfolio.total_value
-            )
-        )
+        self._sync_manual_capital_delta_to_sod(env_key, self.portfolio)
+
+        if is_sim:
+            current_eq = self.portfolio.total_value
+        else:
+            current_eq = self.portfolio.operational_value
+            if current_eq <= 0:
+                return
 
         start_eq = self._start_of_day_equity.get(env_key)
         if start_eq is None or start_eq <= 0:
             if current_eq > 0:
-                self._start_of_day_equity[env_key] = current_eq
+                self._set_start_of_day_baseline(env_key, self.portfolio, current_eq)
             daily_pnl = 0.0
         else:
             daily_pnl = (current_eq - start_eq) / start_eq
@@ -682,11 +811,12 @@ class CortexEngine:
                 init_eq = (
                     self.portfolio.total_value
                     if self.settings.simulation_mode
-                    else (self.portfolio.operational_value or self.portfolio.total_value)
+                    else self.portfolio.operational_value
                 )
                 if init_eq > 0:
-                    self._start_of_day_equity[env_key] = init_eq
+                    self._set_start_of_day_baseline(env_key, self.portfolio, init_eq)
 
+            partial_tp_tickers_this_cycle: set[str] = set()
             positions = self.portfolio.positions
             if positions:
                 prev_stops = {
@@ -741,7 +871,9 @@ class CortexEngine:
                             self.portfolio.reduce_position(position.ticker, fill_price, sold_qty)
                         else:
                             self.portfolio.remove_position(position.ticker, fill_price)
+                            self._set_prod_partial_exit_flag(position.ticker, False)
 
+                        self._mark_sold_today(position.ticker, is_simulated=self.settings.simulation_mode)
                         realized_pnl = (fill_price - entry_before) * sold_qty
                         self._record_production_realized_pnl(
                             ticker=position.ticker,
@@ -805,8 +937,43 @@ class CortexEngine:
                         )
                         continue
 
+                    qty_to_sell = self.risk_manager.calculate_partial_tp_quantity(
+                        position,
+                        simulation_mode=self.settings.simulation_mode,
+                    )
+                    norm_tp = normalize_b3_ticker(position.ticker)
+                    if qty_to_sell <= 0:
+                        self.portfolio.update_position_stop(
+                            position.ticker,
+                            protected_sl,
+                            partial_exit_done=True,
+                        )
+                        self._set_prod_partial_exit_flag(position.ticker, True)
+                        if hasattr(self.broker, "set_partial_exit_done"):
+                            try:
+                                self.broker.set_partial_exit_done(position.ticker, True)
+                            except Exception as p_err:
+                                logger.debug(
+                                    'Falha ao persistir partial_exit_done no broker para %s: %s',
+                                    position.ticker, p_err,
+                                )
+                        try:
+                            self.broker.modify_stop_loss(position.ticker, protected_sl)
+                        except Exception as mod_err:
+                            logger.warning(
+                                'Falha ao elevar SL breakeven para lote padrão indivisível de %s: %s',
+                                position.ticker, mod_err,
+                            )
+                        if norm_tp:
+                            partial_tp_tickers_this_cycle.add(norm_tp)
+                        logger.info(
+                            '🎯 Take-Profit (+15%%) em lote padrão indivisível (%dx %s): '
+                            'venda fracionária omitida na B3; Stop-Loss blindado em R$ %.2f.',
+                            position.quantity, position.ticker, protected_sl,
+                        )
+                        continue
+
                     logger.info('🎯 Executando realização parcial: %s', position.ticker)
-                    qty_to_sell = max(1, position.quantity // 2)
                     entry_before = position.entry_price
                     trade = self.broker.sell(position.ticker, qty_to_sell, position.current_price)
                     if trade is not None and trade.status == OrderStatus.FILLED:
@@ -827,6 +994,10 @@ class CortexEngine:
                             new_sl,
                             partial_exit_done=True,
                         )
+                        self._set_prod_partial_exit_flag(position.ticker, True)
+                        self._mark_sold_today(position.ticker, is_simulated=self.settings.simulation_mode)
+                        if norm_tp:
+                            partial_tp_tickers_this_cycle.add(norm_tp)
                         if hasattr(self.broker, "set_partial_exit_done"):
                             try:
                                 self.broker.set_partial_exit_done(position.ticker, True)
@@ -877,11 +1048,11 @@ class CortexEngine:
             if not self.settings.simulation_mode:
                 active_goal = self.db.get_active_withdrawal_goal()
                 if active_goal and active_goal.get("mode") == "on_profit":
-                    current_equity = self.portfolio.total_value
+                    current_equity = self.portfolio.operational_value
                     target_equity = float(active_goal.get("target_equity", 0.0) or 0.0)
                     if current_equity >= target_equity > 0:
                         logger.info(
-                            "🎯 META DE SAQUE ATINGIDA (PRODUÇÃO): Equity R$ %.2f >= Alvo R$ %.2f",
+                            "🎯 META DE SAQUE ATINGIDA (PRODUÇÃO): Equity Operacional R$ %.2f >= Alvo R$ %.2f",
                             current_equity, target_equity,
                         )
                         self.execute_smart_withdrawal(
@@ -890,7 +1061,7 @@ class CortexEngine:
                             goal_id=active_goal["id"],
                         )
 
-        if self._stop_event.is_set():
+        if self._is_stop_requested():
             return
 
         news = self.news_scraper.fetch_all_news()
@@ -951,9 +1122,27 @@ class CortexEngine:
             logger.debug('Falha no pré-carregamento em lote: %s', exc)
 
         cycle_sim_mode = self.settings.simulation_mode
+        env_tag_cycle = "homologation" if cycle_sim_mode else "production"
+        sold_today_norms: set[str] = set()
+        if bool(getattr(self.settings, "AVOID_DAY_TRADE_TAX", True)):
+            sold_today_norms.update(self._sold_today_by_env.get(env_tag_cycle, set()))
+            try:
+                raw_today_trades = _call_with_supported_kwargs(
+                    self.db.get_trades_today,
+                    is_simulated=cycle_sim_mode,
+                    environment=env_tag_cycle,
+                )
+                for tr in self._filter_trades_by_env(raw_today_trades or [], cycle_sim_mode):
+                    act_up = str(tr.get("action", "")).upper()
+                    if act_up in ("SELL", "VENDA", "EMERGENCY_SELL", "VENDA_EMERGENCIAL"):
+                        nt_sold = normalize_b3_ticker(str(tr.get("ticker", "")))
+                        if nt_sold:
+                            sold_today_norms.add(nt_sold)
+            except Exception as st_err:
+                logger.debug("Aviso ao consultar vendas do dia p/ escudo Anti-Day-Trade: %s", st_err)
 
         for ticker in ordered_tickers:
-            if self._stop_event.is_set():
+            if self._is_stop_requested():
                 break
             if self.settings.simulation_mode != cycle_sim_mode:
                 logger.info('Ambiente alterado durante o ciclo — interrompendo lote atual de avaliações.')
@@ -961,7 +1150,9 @@ class CortexEngine:
 
             try:
                 norm_t = normalize_b3_ticker(ticker)
-                preloaded_df = ohlcv_batch.get(norm_t) or ohlcv_batch.get(ticker)
+                preloaded_df = ohlcv_batch.get(norm_t)
+                if preloaded_df is None:
+                    preloaded_df = ohlcv_batch.get(ticker)
                 decision = _call_with_supported_kwargs(
                     self.decision_engine.evaluate,
                     ticker=ticker,
@@ -984,6 +1175,17 @@ class CortexEngine:
                 self._recent_decisions = self._recent_decisions[-50:]
 
                 if decision.action == Action.BUY:
+                    if (
+                        bool(getattr(self.settings, "AVOID_DAY_TRADE_TAX", True))
+                        and norm_t in sold_today_norms
+                    ):
+                        logger.info(
+                            '🛡️ Compra de %s bloqueada — ativo já vendido hoje '
+                            '(Escudo Tributário PF Anti-Day-Trade).',
+                            decision.ticker,
+                        )
+                        continue
+
                     in_opening = (
                         getattr(self.scheduler, 'is_opening_stabilization', lambda: False)() is True
                     )
@@ -1005,9 +1207,24 @@ class CortexEngine:
                             self._execute_buy(decision)
 
                 elif decision.action in (Action.SELL, Action.EMERGENCY_SELL):
+                    if (
+                        decision.action == Action.SELL
+                        and norm_t in partial_tp_tickers_this_cycle
+                    ):
+                        logger.info(
+                            '⏸️ Venda discricionária de %s ignorada — Take-Profit parcial já executado neste ciclo.',
+                            decision.ticker,
+                        )
+                        continue
+
                     with self._engine_lock:
                         if self.settings.simulation_mode == cycle_sim_mode:
                             self._execute_sell(decision)
+                            if (
+                                bool(getattr(self.settings, "AVOID_DAY_TRADE_TAX", True))
+                                and norm_t in self._sold_today_by_env.get(env_tag_cycle, set())
+                            ):
+                                sold_today_norms.add(norm_t)
 
             except Exception as e:
                 logger.error('Erro ao avaliar %s: %s', ticker, e, exc_info=True)
@@ -1088,8 +1305,14 @@ class CortexEngine:
                     reasoning=decision.reasoning or "Sinal convergente de compra",
                     is_simulated=self.settings.simulation_mode,
                 )
+                executed_decision = dc_replace(
+                    decision,
+                    quantity=filled_qty,
+                    price=fill_price,
+                    stop_loss=sl_val,
+                )
                 self.telegram.send_trade_alert(
-                    decision, simulation=self.settings.simulation_mode
+                    executed_decision, simulation=self.settings.simulation_mode
                 )
                 logger.info(
                     '✅ COMPRA executada: %s — %d ações @ R$ %.2f',
@@ -1124,7 +1347,9 @@ class CortexEngine:
                     self.portfolio.reduce_position(decision.ticker, fill_price, sold_qty)
                 else:
                     self.portfolio.remove_position(decision.ticker, fill_price)
+                    self._set_prod_partial_exit_flag(decision.ticker, False)
 
+                self._mark_sold_today(decision.ticker, is_simulated=self.settings.simulation_mode)
                 realized_pnl = (fill_price - entry_before) * sold_qty
                 self._record_production_realized_pnl(
                     ticker=decision.ticker,
@@ -1145,8 +1370,14 @@ class CortexEngine:
                     reasoning=decision.reasoning or "Sinal técnico/sentimento de venda",
                     is_simulated=self.settings.simulation_mode,
                 )
+                executed_decision = dc_replace(
+                    decision,
+                    quantity=sold_qty,
+                    price=fill_price,
+                    stop_loss=pos.stop_loss if pos else decision.stop_loss,
+                )
                 self.telegram.send_trade_alert(
-                    decision, simulation=self.settings.simulation_mode
+                    executed_decision, simulation=self.settings.simulation_mode
                 )
                 logger.info(
                     '✅ VENDA executada: %s — %d ações @ R$ %.2f',
@@ -1172,7 +1403,7 @@ class CortexEngine:
             logger.warning("Aviso durante limpeza automática do SQLite: %s", prune_err)
 
         for ticker in self.settings.watchlist:
-            if self._stop_event.is_set():
+            if self._is_stop_requested():
                 break
             try:
                 df = self.market_data.get_ohlcv(ticker, period='3mo', interval='1d')
@@ -1310,13 +1541,23 @@ class CortexEngine:
             self._closing_report_sent_today = False
             self._last_alert_date = today
             self._completed_maintenance_windows.clear()
+            self._sold_today_by_env = {
+                "homologation": set(),
+                "production": set(),
+            }
 
             sim_eq = self.sim_portfolio.total_value
-            prod_eq = self.prod_portfolio.operational_value or self.prod_portfolio.total_value
-            self._start_of_day_equity = {
-                "homologation": sim_eq if sim_eq > 0 else None,
-                "production": prod_eq if prod_eq > 0 else None,
-            }
+            prod_eq = self.prod_portfolio.operational_value
+            self._set_start_of_day_baseline(
+                "homologation",
+                self.sim_portfolio,
+                sim_eq if sim_eq > 0 else None,
+            )
+            self._set_start_of_day_baseline(
+                "production",
+                self.prod_portfolio,
+                prod_eq if prod_eq > 0 else None,
+            )
             self._circuit_breaker_alerted = {
                 "homologation": False,
                 "production": False,
@@ -1355,56 +1596,190 @@ class CortexEngine:
                     logger.warning('Erro ao obter posições do broker, mantendo locais: %s', pos_err)
                     broker_positions = None
 
+                if not self.settings.simulation_mode and (
+                    broker_cash is None or broker_positions is None
+                ):
+                    logger.warning(
+                        'Sincronização de Produção abortada (saldo=%s, posições=%s) — '
+                        'preservando custódia local e teto da IA contra falha transitória.',
+                        'OK' if broker_cash is not None else 'indisponível',
+                        len(broker_positions) if broker_positions is not None else 'indisponíveis',
+                    )
+                    return
+
+                persisted_partial_map = (
+                    self._load_prod_partial_exit_map()
+                    if not self.settings.simulation_mode
+                    else {}
+                )
+                stops_to_resync: list[tuple[str, float]] = []
+                updated_partial_map: Optional[dict[str, bool]] = None
+
                 with self.portfolio._lock:
+                    prev_op_eq = self.portfolio.operational_value
+                    prev_initial = self.portfolio.initial_capital
+
                     if broker_cash is not None:
-                        self.portfolio.free_cash = broker_cash
+                        self.portfolio.set_free_cash(broker_cash)
 
                     if broker_positions is not None:
                         local_map = {
                             normalize_b3_ticker(p.ticker): p for p in self.portfolio._positions
                         }
+
+                        grouped_legs: dict[str, list[Any]] = {}
+                        for bp in broker_positions:
+                            if getattr(bp, 'quantity', 0) is None or int(bp.quantity) <= 0:
+                                continue
+                            norm = normalize_b3_ticker(bp.ticker)
+                            if not norm:
+                                continue
+                            grouped_legs.setdefault(norm, []).append(bp)
+
                         reconciled: list[Position] = []
 
-                        for bp in broker_positions:
-                            norm = normalize_b3_ticker(bp.ticker)
-                            bp_sl = float(getattr(bp, 'stop_loss', 0.0) or 0.0)
-                            bp_curr = float(getattr(bp, 'current_price', 0.0) or bp.entry_price)
+                        for norm, legs in grouped_legs.items():
+                            total_qty = sum(int(leg.quantity) for leg in legs)
+                            if total_qty <= 0:
+                                continue
 
-                            bp_entry_dt = getattr(bp, 'entry_time', None) or getattr(bp, 'timestamp', None)
+                            if len(legs) == 1:
+                                leg0 = legs[0]
+                                cons_entry = float(leg0.entry_price or 0.0)
+                                cons_curr = float(
+                                    getattr(leg0, 'current_price', 0.0) or leg0.entry_price or 0.0
+                                )
+                            else:
+                                entry_num = sum(
+                                    float(leg.entry_price) * int(leg.quantity)
+                                    for leg in legs
+                                    if getattr(leg, 'entry_price', 0.0) and float(leg.entry_price) > 0
+                                )
+                                entry_den = sum(
+                                    int(leg.quantity)
+                                    for leg in legs
+                                    if getattr(leg, 'entry_price', 0.0) and float(leg.entry_price) > 0
+                                )
+                                cons_entry = (
+                                    round(entry_num / entry_den, 4) if entry_den > 0 else 0.0
+                                )
+
+                                curr_num = 0.0
+                                curr_den = 0
+                                for leg in legs:
+                                    lc = float(
+                                        getattr(leg, 'current_price', 0.0) or leg.entry_price or 0.0
+                                    )
+                                    if lc > 0:
+                                        curr_num += lc * int(leg.quantity)
+                                        curr_den += int(leg.quantity)
+                                cons_curr = (
+                                    round(curr_num / curr_den, 4) if curr_den > 0 else cons_entry
+                                )
+
+                            leg_dts: list[datetime] = []
+                            for leg in legs:
+                                raw_dt = getattr(leg, 'entry_time', None) or getattr(leg, 'timestamp', None)
+                                if isinstance(raw_dt, datetime):
+                                    norm_dt = (
+                                        raw_dt.astimezone(BRT)
+                                        if raw_dt.tzinfo is not None
+                                        else raw_dt.replace(tzinfo=BRT)
+                                    )
+                                    leg_dts.append(norm_dt)
+                            cons_entry_dt: Optional[datetime] = min(leg_dts) if leg_dts else None
+
+                            positive_stops = [
+                                float(getattr(leg, 'stop_loss', 0.0) or 0.0)
+                                for leg in legs
+                                if float(getattr(leg, 'stop_loss', 0.0) or 0.0) > 0
+                            ]
+                            valid_below_curr = (
+                                [s for s in positive_stops if s < cons_curr]
+                                if cons_curr > 0
+                                else positive_stops
+                            )
+                            cons_bp_sl = (
+                                max(valid_below_curr)
+                                if valid_below_curr
+                                else (min(positive_stops) if positive_stops else 0.0)
+                            )
+
+                            cons_partial_done = (
+                                any(bool(getattr(leg, 'partial_exit_done', False)) for leg in legs)
+                                or bool(persisted_partial_map.get(norm, False))
+                            )
+
+                            primary_ticket = None
+                            for leg in legs:
+                                tk = getattr(leg, 'ticket', None)
+                                raw_sym = str(getattr(leg, 'ticker', '')).strip().upper()
+                                if tk is not None and (raw_sym == norm or int(leg.quantity) >= 100):
+                                    primary_ticket = tk
+                                    break
+                            if primary_ticket is None:
+                                for leg in legs:
+                                    tk = getattr(leg, 'ticket', None)
+                                    if tk is not None:
+                                        primary_ticket = tk
+                                        break
 
                             if norm in local_map:
                                 local_pos = local_map[norm]
-                                local_pos.quantity = bp.quantity
-                                if bp.entry_price and bp.entry_price > 0:
-                                    local_pos.entry_price = bp.entry_price
-                                if bp_curr > 0:
-                                    local_pos.current_price = bp_curr
-                                if isinstance(bp_entry_dt, datetime):
-                                    local_pos.entry_time = bp_entry_dt
-                                effective_sl = max(local_pos.stop_loss, bp_sl)
+                                local_pos.quantity = total_qty
+                                if cons_entry > 0:
+                                    local_pos.entry_price = cons_entry
+                                if cons_curr > 0:
+                                    local_pos.current_price = cons_curr
+                                if cons_entry_dt is not None:
+                                    local_pos.entry_time = cons_entry_dt
+                                if primary_ticket is not None:
+                                    local_pos.ticket = primary_ticket
+                                local_pos.partial_exit_done = bool(
+                                    local_pos.partial_exit_done or cons_partial_done
+                                )
+                                effective_sl = max(local_pos.stop_loss, cons_bp_sl)
                                 if effective_sl <= 0 and local_pos.entry_price > 0:
-                                    effective_sl = self.risk_manager.calculate_stop_loss(local_pos.entry_price)
+                                    effective_sl = self.risk_manager.calculate_stop_loss(
+                                        local_pos.entry_price
+                                    )
                                 local_pos.stop_loss = effective_sl
+                                if local_pos.stop_loss > cons_bp_sl + 1e-4:
+                                    stops_to_resync.append((norm, local_pos.stop_loss))
                                 reconciled.append(local_pos)
                             else:
-                                effective_sl = bp_sl
-                                if effective_sl <= 0 and bp.entry_price > 0:
-                                    effective_sl = self.risk_manager.calculate_stop_loss(bp.entry_price)
+                                effective_sl = cons_bp_sl
+                                if effective_sl <= 0 and cons_entry > 0:
+                                    effective_sl = self.risk_manager.calculate_stop_loss(cons_entry)
                                 pos_kwargs: dict[str, Any] = {
-                                    "ticker": norm or bp.ticker,
-                                    "quantity": bp.quantity,
-                                    "entry_price": bp.entry_price,
+                                    "ticker": norm,
+                                    "quantity": total_qty,
+                                    "entry_price": cons_entry,
                                     "stop_loss": effective_sl,
-                                    "current_price": bp_curr if bp_curr > 0 else bp.entry_price,
-                                    "ticket": getattr(bp, 'ticket', None),
-                                    "partial_exit_done": bool(getattr(bp, 'partial_exit_done', False)),
+                                    "current_price": cons_curr if cons_curr > 0 else cons_entry,
+                                    "ticket": primary_ticket,
+                                    "partial_exit_done": cons_partial_done,
                                 }
-                                if isinstance(bp_entry_dt, datetime):
-                                    pos_kwargs["entry_time"] = bp_entry_dt
+                                if cons_entry_dt is not None:
+                                    pos_kwargs["entry_time"] = cons_entry_dt
+                                if (
+                                    not self.settings.simulation_mode
+                                    and effective_sl > cons_bp_sl + 1e-4
+                                ):
+                                    stops_to_resync.append((norm, effective_sl))
                                 reconciled.append(Position(**pos_kwargs))
 
                         self.portfolio._positions.clear()
                         self.portfolio._positions.extend(reconciled)
+
+                        if not self.settings.simulation_mode:
+                            cleaned_partial = {
+                                normalize_b3_ticker(p.ticker): True
+                                for p in reconciled
+                                if getattr(p, 'partial_exit_done', False)
+                            }
+                            if cleaned_partial != persisted_partial_map:
+                                updated_partial_map = cleaned_partial
 
                     if not self.settings.simulation_mode:
                         cost_basis_eq = self.portfolio.free_cash + self.portfolio.allocated_capital
@@ -1417,12 +1792,10 @@ class CortexEngine:
                             self.portfolio.free_cash,
                             max(0.0, cost_basis_eq - self.portfolio.ai_allocated_capital),
                         )
-                        current_pnl = self.portfolio.cumulative_realized_pnl + sum(
-                            p.pnl for p in self.portfolio._positions
-                        )
-                        self.portfolio.initial_capital = max(
-                            0.0,
-                            self.portfolio.operational_value - current_pnl,
+                        self.portfolio._rebalance_baseline_after_capital_change(
+                            prev_op_eq,
+                            prev_initial,
+                            track_manual_delta=False,
                         )
                         try:
                             self.db.set_config(
@@ -1431,6 +1804,18 @@ class CortexEngine:
                             )
                         except Exception:
                             pass
+
+                if updated_partial_map is not None:
+                    self._save_prod_partial_exit_map(updated_partial_map)
+
+                for norm_t, target_sl in stops_to_resync:
+                    try:
+                        self.broker.modify_stop_loss(norm_t, target_sl)
+                    except Exception as mod_err:
+                        logger.warning(
+                            'Falha ao ressincronizar Stop-Loss no broker para %s (R$ %.2f): %s',
+                            norm_t, target_sl, mod_err,
+                        )
 
                 logger.info(
                     'Portfólio sincronizado com broker — Saldo Livre: R$ %.2f, Posições: %d',
@@ -1549,6 +1934,7 @@ class CortexEngine:
             return
 
         self._stopped = True
+        self._stop_requested = True
         self.running = False
         self._stop_event.set()
 
@@ -1581,6 +1967,18 @@ class CortexEngine:
         except Exception as e:
             logger.error('Erro ao desconectar broker: %s', e)
 
+        try:
+            if hasattr(self.news_scraper, "close"):
+                self.news_scraper.close()
+        except Exception as e:
+            logger.debug("Aviso ao fechar news_scraper: %s", e)
+
+        try:
+            if hasattr(self.market_data, "close"):
+                self.market_data.close()
+        except Exception as e:
+            logger.debug("Aviso ao fechar market_data: %s", e)
+
         if getattr(WebDashboardState, '_engine', None) is self:
             WebDashboardState._engine = None
         if getattr(self.dashboard_state, '_engine', None) is self:
@@ -1599,6 +1997,7 @@ class CortexEngine:
         logger.info('═══════════════════════════════════════════════════')
         logger.info('   CÓRTEX DESLIGADO (%s)', status_label.upper())
         logger.info('═══════════════════════════════════════════════════')
+        flush_log_handlers()
 
     def get_state(self) -> dict[str, Any]:
         """Retorna estado completo do sistema para o dashboard WebSocket."""
@@ -1725,36 +2124,38 @@ class CortexEngine:
                 decisions = self.db.get_recent_decisions(limit=5, environment=env_str)
                 if not decisions:
                     return (
-                        "🧠 *PENSAMENTOS DO CÓRTEX IA*\n"
+                        "🧠 <b>PENSAMENTOS DO CÓRTEX IA</b>\n"
                         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"Ainda não há deliberações registradas para o ambiente atual (*{env_str.upper()}*)."
+                        f"Ainda não há deliberações registradas para o ambiente atual "
+                        f"(<b>{html.escape(env_str.upper())}</b>)."
                     )
 
-                msg = f"🧠 *ÚLTIMAS DELIBERAÇÕES — {env_str.upper()}*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                msg = (
+                    f"🧠 <b>ÚLTIMAS DELIBERAÇÕES — {html.escape(env_str.upper())}</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                )
                 for dec in decisions:
                     emoji = (
                         "🟢 🛒" if dec['action'] in ("BUY", "COMPRA")
                         else "🔴 💸" if dec['action'] in ("SELL", "VENDA")
                         else "⚪ ⏸️"
                     )
-                    conf_pct = dec.get('confidence', 0.0) * 100
-                    dt = str(dec.get('timestamp', ''))[:16].replace('T', ' ')
-                    msg += f"{emoji} *{dec['ticker']}* — `{dec['action']}` ({conf_pct:.0f}%)\n"
+                    conf_pct = float(dec.get('confidence', 0.0) or 0.0) * 100
+                    dt = html.escape(str(dec.get('timestamp', ''))[:16].replace('T', ' '))
+                    ticker_safe = html.escape(str(dec.get('ticker', '')))
+                    action_safe = html.escape(str(dec.get('action', '')))
+                    msg += f"{emoji} <b>{ticker_safe}</b> — <code>{action_safe}</code> ({conf_pct:.0f}%)\n"
                     msg += f"🕒 {dt}\n"
                     if dec.get('reasoning'):
-                        reasoning_safe = (
-                            str(dec['reasoning'])[:220]
-                            .replace('_', '\\_')
-                            .replace('*', '\\*')
-                            .replace('[', '\\[')
-                            .replace('`', '\\`')
-                        )
-                        msg += f"💡 _{reasoning_safe}_\n\n"
+                        reasoning_safe = html.escape(str(dec['reasoning'])[:220])
+                        msg += f"💡 <i>{reasoning_safe}</i>\n\n"
 
                 return msg
             except Exception as e:
                 logger.error("Erro em cmd_pensamentos: %s", e)
                 return "❌ Erro ao consultar deliberações do cérebro IA."
+
+        cmd_pensamentos.parse_mode = 'HTML'  # type: ignore[attr-defined]
 
         def cmd_carteira() -> str:
             summary = self.portfolio.get_summary()
@@ -1771,10 +2172,15 @@ class CortexEngine:
 
             for pos in summary.positions:
                 price_data = self.market_data.get_current_price(pos.ticker)
-                curr_price = (
-                    price_data.get('last', pos.current_price)
+                raw_last = (
+                    price_data.get('last')
                     if isinstance(price_data, dict)
-                    else (price_data or pos.current_price)
+                    else price_data
+                )
+                curr_price = (
+                    float(raw_last)
+                    if isinstance(raw_last, (int, float)) and raw_last > 0
+                    else float(pos.current_price or pos.entry_price or 0.0)
                 )
                 cost = pos.quantity * pos.entry_price
                 val = pos.quantity * curr_price
@@ -1899,6 +2305,9 @@ class CortexEngine:
                                 self.portfolio.reduce_position(p.ticker, fill_price, sold_qty)
                             else:
                                 self.portfolio.remove_position(p.ticker, fill_price)
+                                self._set_prod_partial_exit_flag(p.ticker, False)
+
+                            self._mark_sold_today(p.ticker, is_simulated=self.settings.simulation_mode)
 
                             realized_pnl = (fill_price - entry_before) * sold_qty
                             self._record_production_realized_pnl(
@@ -1965,7 +2374,12 @@ class CortexEngine:
         self.telegram.register_command('/saldo', cmd_saldo)
         self.telegram.register_command('/pause', cmd_pause)
         self.telegram.register_command('/resume', cmd_resume)
-        self.telegram.register_command('/pensamentos', cmd_pensamentos)
+        _call_with_supported_kwargs(
+            self.telegram.register_command,
+            '/pensamentos',
+            cmd_pensamentos,
+            parse_mode='HTML',
+        )
         self.telegram.register_command('/carteira', cmd_carteira)
         self.telegram.register_command('/trades', cmd_trades)
         self.telegram.register_command('/desempenho', cmd_desempenho)
@@ -2086,7 +2500,8 @@ class CortexEngine:
         except Exception:
             d2_unsettled = 0.0
 
-        settled_withdrawable = max(0.0, vault_cash - d2_unsettled)
+        settled_account_cash = max(0.0, broker_cash - d2_unsettled)
+        settled_withdrawable = round(min(vault_cash, settled_account_cash), 2)
 
         return {
             "broker_balance": round(broker_cash, 2),
@@ -2098,12 +2513,19 @@ class CortexEngine:
             "ai_allocated_capital": round(ai_cap, 2),
             "vault_reserve_cash": round(vault_cash, 2),
             "unsettled_d2_cash": round(d2_unsettled, 2),
-            "settled_withdrawable_cash": round(settled_withdrawable, 2),
+            "settled_withdrawable_cash": settled_withdrawable,
             "next_d2_settlement_date": next_d2_date,
             "buying_power": round(buying_power, 2),
             "cumulative_realized_pnl": round(cum_pnl, 2),
             "positions_count": positions_count,
             "broker_connected": broker_connected,
+        }
+
+    def get_capital_management_summary(self) -> dict[str, Any]:
+        """Retorna resumo consolidado de gestão de capital (Homologação e Produção)."""
+        return {
+            "simulation": self.get_simulation_summary(),
+            "production": self.get_production_summary(),
         }
 
     def adjust_production_ceiling(
@@ -2131,7 +2553,7 @@ class CortexEngine:
             if broker_connected and self.prod_broker is not None:
                 try:
                     live_cash = max(0.0, float(self.prod_broker.get_balance()))
-                    self.prod_portfolio.free_cash = live_cash
+                    self.prod_portfolio.set_free_cash(live_cash)
                     self.db.set_config("prod_broker_account_balance", f"{live_cash:.2f}")
                 except Exception as exc:
                     logger.warning("Falha ao consultar saldo do broker em adjust_production_ceiling: %s", exc)
@@ -2139,7 +2561,7 @@ class CortexEngine:
                 cfg_bal = self.db.get_config("prod_broker_account_balance")
                 if cfg_bal is not None:
                     try:
-                        self.prod_portfolio.free_cash = max(0.0, float(cfg_bal))
+                        self.prod_portfolio.set_free_cash(max(0.0, float(cfg_bal)))
                     except (ValueError, TypeError):
                         pass
 
@@ -2179,11 +2601,14 @@ class CortexEngine:
                     self.prod_portfolio.positions,
                     target_amount=excess,
                     market_data=self.market_data,
+                    simulation_mode=False,
                 )
                 for item in plan:
                     ticker = item["ticker"]
                     qty = int(item["quantity"])
                     price = float(item["price"])
+                    existing = self.prod_portfolio.get_position(ticker)
+                    entry_before = existing.entry_price if existing else price
                     trade = self.prod_broker.sell(ticker, qty, price)
                     if trade is not None and trade.status == OrderStatus.FILLED:
                         fill_price = (
@@ -2192,11 +2617,30 @@ class CortexEngine:
                             else price
                         )
                         sold_qty = int(trade.quantity) if (trade.quantity and trade.quantity > 0) else qty
-                        existing = self.prod_portfolio.get_position(ticker)
                         if existing and sold_qty < existing.quantity:
                             self.prod_portfolio.reduce_position(ticker, fill_price, sold_qty)
                         else:
                             self.prod_portfolio.remove_position(ticker, fill_price)
+                            if not self.settings.simulation_mode:
+                                self._set_prod_partial_exit_flag(ticker, False)
+                            else:
+                                cur_map = self._load_prod_partial_exit_map()
+                                nt = normalize_b3_ticker(ticker)
+                                if nt in cur_map:
+                                    cur_map.pop(nt, None)
+                                    self._save_prod_partial_exit_map(cur_map)
+
+                        self._mark_sold_today(ticker, is_simulated=False)
+                        realized_pnl = (fill_price - entry_before) * sold_qty
+                        self._record_production_realized_pnl(
+                            ticker=ticker,
+                            pnl=realized_pnl,
+                            reason=f"Liquidação p/ redução de teto IA ({username})",
+                            entry_price=entry_before,
+                            exit_price=fill_price,
+                            quantity=sold_qty,
+                            force_production=True,
+                        )
 
                         self._insert_trade_safe(
                             ticker=trade.ticker,
@@ -2212,12 +2656,13 @@ class CortexEngine:
 
                 try:
                     refreshed_cash = max(0.0, float(self.prod_broker.get_balance()))
-                    self.prod_portfolio.free_cash = refreshed_cash
+                    self.prod_portfolio.set_free_cash(refreshed_cash)
                     self.db.set_config("prod_broker_account_balance", f"{refreshed_cash:.2f}")
                 except Exception:
                     pass
 
             self.prod_portfolio.adjust_ai_capital(new_cap)
+            self._sync_manual_capital_delta_to_sod("production", self.prod_portfolio)
 
             ai_cap_saved = round(self.prod_portfolio.ai_allocated_capital, 2)
             vault_saved = round(self.prod_portfolio.vault_reserve_cash, 2)
@@ -2279,22 +2724,29 @@ class CortexEngine:
                 if reset_positions:
                     self.sim_portfolio._positions.clear()
                     self.sim_portfolio.initial_capital = target_cap
-                    self.sim_portfolio.free_cash = target_cap
+                    self.sim_portfolio.set_free_cash(target_cap)
                     self.sim_portfolio.ai_allocated_capital = target_cap
                     self.sim_portfolio.vault_reserve_cash = 0.0
                     self.sim_portfolio.cumulative_realized_pnl = 0.0
                 else:
                     allocated = self.sim_portfolio.allocated_capital
                     self.sim_portfolio.initial_capital = target_cap
-                    self.sim_portfolio.free_cash = max(0.0, target_cap - allocated)
+                    self.sim_portfolio.set_free_cash(max(0.0, target_cap - allocated))
                     self.sim_portfolio.ai_allocated_capital = target_cap
                     self.sim_portfolio.vault_reserve_cash = 0.0
                     self.sim_portfolio.cumulative_realized_pnl = 0.0
+                self.sim_portfolio._manual_capital_delta_accum = 0.0
 
-            self._start_of_day_equity["homologation"] = self.sim_portfolio.total_value
+            self._set_start_of_day_baseline(
+                "homologation",
+                self.sim_portfolio,
+                self.sim_portfolio.total_value,
+            )
             self._circuit_breaker_alerted["homologation"] = False
             self._env_circuit_breaker_active["homologation"] = False
             self._env_daily_pnl["homologation"] = 0.0
+            if reset_positions:
+                self._sold_today_by_env["homologation"] = set()
 
             if self.settings.simulation_mode:
                 self.portfolio = self.sim_portfolio
@@ -2343,12 +2795,18 @@ class CortexEngine:
             free_unlocked = max(0.0, self.portfolio.free_cash - self.portfolio.vault_reserve_cash)
             needed_from_sales = max(0.0, amount - free_unlocked)
             sold_positions_summary: list[str] = []
+            total_sold_val: float = 0.0
 
             if needed_from_sales > 0:
                 plan = self.risk_manager.select_positions_for_liquidation(
                     self.portfolio.positions,
                     target_amount=needed_from_sales,
                     market_data=self.market_data,
+                    exclude_same_day_profit=(
+                        mode == "on_profit"
+                        and bool(getattr(self.settings, "AVOID_DAY_TRADE_TAX", True))
+                    ),
+                    simulation_mode=False,
                 )
                 for item in plan:
                     ticker = item["ticker"]
@@ -2368,13 +2826,28 @@ class CortexEngine:
                             self.portfolio.reduce_position(ticker, fill_price, sold_qty)
                         else:
                             self.portfolio.remove_position(ticker, fill_price)
+                            self._set_prod_partial_exit_flag(ticker, False)
 
+                        self._mark_sold_today(ticker, is_simulated=False)
+                        realized_pnl = (fill_price - entry_before) * sold_qty
+                        self._record_production_realized_pnl(
+                            ticker=ticker,
+                            pnl=realized_pnl,
+                            reason=f"Liquidação inteligente p/ saque ({mode})",
+                            entry_price=entry_before,
+                            exit_price=fill_price,
+                            quantity=sold_qty,
+                            force_production=True,
+                        )
+
+                        sale_gross = round(fill_price * sold_qty, 2)
+                        total_sold_val += sale_gross
                         self._insert_trade_safe(
                             ticker=trade.ticker,
                             action=trade.order_type.value,
                             quantity=sold_qty,
                             price=fill_price,
-                            total_value=round(fill_price * sold_qty, 2),
+                            total_value=sale_gross,
                             stop_loss=existing.stop_loss if existing else None,
                             reasoning=f"Liquidação inteligente para saque ({mode})",
                             is_simulated=False,
@@ -2382,9 +2855,17 @@ class CortexEngine:
                         sold_positions_summary.append(
                             f"{sold_qty}x {trade.ticker} @ R$ {fill_price:.2f}"
                         )
-                        _ = entry_before
 
             transferred = self.portfolio.deposit_to_vault(amount)
+            self._sync_manual_capital_delta_to_sod("production", self.prod_portfolio)
+
+            prod_summary_now = self.get_production_summary()
+            unsettled_d2_cash = float(prod_summary_now.get("unsettled_d2_cash", 0.0) or 0.0)
+            settled_withdrawable_cash = float(
+                prod_summary_now.get("settled_withdrawable_cash", 0.0) or 0.0
+            )
+            next_d2_date = prod_summary_now.get("next_d2_settlement_date")
+
             if transferred <= 0:
                 return {
                     "success": False,
@@ -2392,6 +2873,9 @@ class CortexEngine:
                     "total_vault": self.portfolio.vault_reserve_cash,
                     "ai_capital": self.portfolio.ai_allocated_capital,
                     "sold_positions": sold_positions_summary,
+                    "unsettled_d2_cash": round(unsettled_d2_cash, 2),
+                    "settled_withdrawable_cash": round(settled_withdrawable_cash, 2),
+                    "next_d2_settlement_date": next_d2_date,
                     "message": "Saldo livre insuficiente para transferir ao Cofre Reserva.",
                 }
 
@@ -2426,6 +2910,15 @@ class CortexEngine:
                 is_simulated=False,
             )
 
+            prod_summary_after = self.get_production_summary()
+            unsettled_d2_cash = float(
+                prod_summary_after.get("unsettled_d2_cash", unsettled_d2_cash) or 0.0
+            )
+            settled_withdrawable_cash = float(
+                prod_summary_after.get("settled_withdrawable_cash", settled_withdrawable_cash) or 0.0
+            )
+            next_d2_date = prod_summary_after.get("next_d2_settlement_date", next_d2_date)
+
             header_title = (
                 "META DE SAQUE CONCLUÍDA!" if mode == "on_profit" else "SAQUE EXECUTADO COM SUCESSO!"
             )
@@ -2436,6 +2929,13 @@ class CortexEngine:
                 f"🤖 Novo Capital da IA: R$ {self.portfolio.ai_allocated_capital:.2f}\n"
                 f"ℹ️ {details}"
             )
+            if total_sold_val > 0:
+                d2_label = next_d2_date or "D+2 dias úteis"
+                alert_msg += (
+                    f"\n⏳ Liquidação B3 (D+2): R$ {unsettled_d2_cash:.2f} em liquidação "
+                    f"(previsão: {d2_label}) | Disponível p/ resgate imediato: "
+                    f"R$ {settled_withdrawable_cash:.2f}"
+                )
             try:
                 self.telegram.send_alert(alert_msg)
             except Exception:
@@ -2448,6 +2948,9 @@ class CortexEngine:
                 "total_vault": round(self.portfolio.vault_reserve_cash, 2),
                 "ai_capital": round(self.portfolio.ai_allocated_capital, 2),
                 "sold_positions": sold_positions_summary,
+                "unsettled_d2_cash": round(unsettled_d2_cash, 2),
+                "settled_withdrawable_cash": round(settled_withdrawable_cash, 2),
+                "next_d2_settlement_date": next_d2_date,
                 "message": "Saque executado com sucesso e transferido para o cofre seguro",
             }
 
@@ -2526,8 +3029,10 @@ class CortexEngine:
                 self.portfolio = self.prod_portfolio
                 self.decision_engine.portfolio = self.prod_portfolio
 
-            self.risk_manager._circuit_breaker_active = self._env_circuit_breaker_active.get(new_mode, False)
-            self.risk_manager._daily_pnl = self._env_daily_pnl.get(new_mode, 0.0)
+            self.risk_manager.restore_daily_state(
+                daily_pnl=self._env_daily_pnl.get(new_mode, 0.0),
+                circuit_breaker_active=self._env_circuit_breaker_active.get(new_mode, False),
+            )
 
             self._sync_portfolio_with_broker()
 
@@ -2535,10 +3040,10 @@ class CortexEngine:
                 init_eq = (
                     self.portfolio.total_value
                     if is_sim
-                    else (self.portfolio.operational_value or self.portfolio.total_value)
+                    else self.portfolio.operational_value
                 )
                 if init_eq > 0:
-                    self._start_of_day_equity[new_mode] = init_eq
+                    self._set_start_of_day_baseline(new_mode, self.portfolio, init_eq)
 
             try:
                 dt_str = datetime.now(BRT).strftime('%d/%m/%Y %H:%M:%S')

@@ -27,7 +27,7 @@ app = FastAPI(title="Córtex IA Dashboard")
 
 _CSP_POLICY = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com data:; "
     "img-src 'self' data: https:; "
@@ -177,6 +177,7 @@ class DashboardServer:
             host=self.host,
             port=self.port,
             log_level="info",
+            log_config=None,
             loop="asyncio",
         )
         self._server = _ThreadedServer(config)

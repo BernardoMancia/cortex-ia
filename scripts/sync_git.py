@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Córtex IA v2.8.0 — Sanitized Git Repository Synchronizer (`scripts/sync_git.py`).
+Córtex IA v2.9.1 — Sanitized Git Repository Synchronizer (`scripts/sync_git.py`).
 
 Synchronizes clean production source code from the workspace root into `GIT/`:
 1. Preserves `data/*.py` (`__init__.py`, `database.py`, `market_data.py`, `news_scraper.py`)
@@ -27,9 +27,9 @@ from pathlib import Path
 
 SRC_DIR = Path(__file__).resolve().parent.parent
 GIT_DIR = SRC_DIR / "GIT"
-DEFAULT_VERSION = "v2.9.0"
+DEFAULT_VERSION = "v2.9.1"
 DEFAULT_COMMIT_MSG = (
-    "release(v2.9.0): autonomous Docker MT5 Bridge, 0ms Bridge quotes, B3 spread/fee/D+2 & Anti-Day-Trade protections"
+    "release(v2.9.1): socket/FD leak fixes, D1 civil timezone, B3 D+2 daily netting, hardened CSP/CSRF & DevOps"
 )
 
 EXCLUDE_DIRS = {
@@ -442,7 +442,7 @@ def main() -> int:
         "-t",
         "--tag",
         default=None,
-        help="Tag opcional de versão (ex: v2.8.0).",
+        help="Tag opcional de versão (ex: v2.9.1).",
     )
     parser.add_argument(
         "--push",

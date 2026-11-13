@@ -38,6 +38,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analysis.decision import DecisionEngine
 from analysis.sentiment import SentimentAnalyzer
 from analysis.technical import TechnicalAnalyzer
+from broker.base import OrderStatus
 from broker.simulator import SimulatorBroker
 from config.settings import settings
 from core.risk_manager import RiskManager
@@ -80,6 +81,9 @@ class MockMarketData:
         self, ticker: str, period: str = "1y", interval: str = "1d"
     ) -> Optional[pd.DataFrame]:
         """Retorna cópia do histórico OHLCV estritamente até `self.current_date`."""
+        norm_interval = (interval or "1d").strip().lower()
+        if norm_interval not in ("1d", "1wk", "1mo"):
+            return None
         sliced = self._resolve_df(ticker)
         if sliced is None or sliced.empty:
             return None
@@ -249,6 +253,8 @@ def _broker_buy(
     res = broker.buy(ticker, quantity=quantity, price=price, **kwargs)
     if isinstance(res, bool):
         return res
+    if hasattr(res, "status"):
+        return res.status == OrderStatus.FILLED
     return bool(getattr(res, "success", True))
 
 
@@ -275,6 +281,8 @@ def _broker_sell(
 
     if isinstance(res, bool):
         return res
+    if hasattr(res, "status"):
+        return res.status == OrderStatus.FILLED
     return bool(getattr(res, "success", True))
 
 
@@ -296,7 +304,9 @@ def _portfolio_reduce_position(
     """Reduz parcialmente posição do `Portfolio` creditando `sell_price`."""
     params = inspect.signature(portfolio.reduce_position).parameters
     accepts_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-    if "sell_price" in params or accepts_varkw:
+    if "quantity_to_sell" in params or accepts_varkw:
+        portfolio.reduce_position(ticker, sell_price=sell_price, quantity_to_sell=quantity)
+    elif "sell_price" in params:
         portfolio.reduce_position(ticker, quantity, sell_price=sell_price)
     else:
         portfolio.reduce_position(ticker, quantity)
@@ -864,6 +874,7 @@ def run_backtest(
                 circuit_breaker_tripped = True
 
             mock_market.current_date = current_day
+            bar_dt_15h_brt = day_dt.replace(hour=15, minute=0, second=0, microsecond=0)
             already_queued_tickers = {o["ticker"] for o in pending_orders}
 
             held_set = {p.ticker for p in portfolio.get_all_positions()}
@@ -875,7 +886,9 @@ def run_backtest(
                 if ticker not in close_prices_today or ticker in already_queued_tickers:
                     continue
                 try:
-                    decision = engine.evaluate(ticker, news_items=[])
+                    decision = engine.evaluate(
+                        ticker, news_items=[], reference_time=bar_dt_15h_brt
+                    )
                 except Exception as exc:
                     logger.error("Erro avaliando %s em %s: %s", ticker, current_day, exc)
                     continue

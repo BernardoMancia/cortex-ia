@@ -26,6 +26,12 @@ from zoneinfo import ZoneInfo
 _DEFAULT_DB_PATH: Final[str] = "/LOGS-PROJETOS/cortex-ia/logs.db"
 _BRT: Final[ZoneInfo] = ZoneInfo("America/Sao_Paulo")
 _TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"bot\d{6,}:[A-Za-z0-9_-]{20,}")
+_GOOGLE_AI_KEY_RE: Final[re.Pattern[str]] = re.compile(r"AIza[0-9A-Za-z_-]{30,}")
+_GOOGLE_AQ_KEY_RE: Final[re.Pattern[str]] = re.compile(r"AQ\.Ab8[0-9A-Za-z_-]{8,}")
+_KV_SECRET_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(BRIDGE_API_KEY|GEMINI_API_KEY|MT5_PASSWORD|VNC_PASSWORD|Password)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
 
 _CREATE_TABLE_SQL: Final[str] = """
 CREATE TABLE IF NOT EXISTS logs (
@@ -45,11 +51,24 @@ VALUES (?, ?, ?, ?, ?);
 """
 
 
+class _FlushRequest:
+    """Sinalizador interno para sincronizar flush da fila SQLite sem encerrar o worker."""
+
+    __slots__ = ("done",)
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+
+
 def scrub_secrets(text: str) -> str:
-    """Remove tokens sensíveis acidentais de mensagens de log."""
+    """Remove tokens e credenciais sensíveis acidentais de mensagens de log."""
     if not text:
         return ""
-    return _TOKEN_RE.sub("bot***:***", text)
+    cleaned = _TOKEN_RE.sub("bot***:***", text)
+    cleaned = _KV_SECRET_RE.sub(r"\1=***", cleaned)
+    cleaned = _GOOGLE_AI_KEY_RE.sub("AIza***", cleaned)
+    cleaned = _GOOGLE_AQ_KEY_RE.sub("AQ.Ab8***", cleaned)
+    return cleaned
 
 
 class SQLiteLogHandler(logging.Handler):
@@ -62,8 +81,11 @@ class SQLiteLogHandler(logging.Handler):
     def __init__(self, db_path: str = _DEFAULT_DB_PATH, max_queue_size: int = 10000) -> None:
         super().__init__()
         self.db_path = db_path
-        self._queue: Queue[tuple[str, str, str, str, str] | None] = Queue(maxsize=max_queue_size)
+        self._queue: Queue[tuple[str, str, str, str, str] | _FlushRequest | None] = Queue(
+            maxsize=max_queue_size
+        )
         self._closed = False
+        self._shutting_down = False
         self._close_lock = threading.Lock()
 
         parent = os.path.dirname(db_path)
@@ -78,7 +100,7 @@ class SQLiteLogHandler(logging.Handler):
             daemon=True,
         )
         self._writer.start()
-        atexit.register(self.close)
+        atexit.register(self.shutdown)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
@@ -96,17 +118,35 @@ class SQLiteLogHandler(logging.Handler):
             conn.close()
 
     def _write_loop(self) -> None:
-        conn = self._connect()
+        conn: sqlite3.Connection | None = None
         try:
             while True:
                 try:
                     first_item = self._queue.get(timeout=1.0)
                 except Empty:
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        conn = None
                     continue
+
                 if first_item is None:
                     break
 
+                if isinstance(first_item, _FlushRequest):
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        conn = None
+                    first_item.done.set()
+                    continue
+
                 batch: list[tuple[str, str, str, str, str]] = [first_item]
+                flush_events: list[threading.Event] = []
                 stop_after_batch = False
                 while len(batch) < 100:
                     try:
@@ -116,18 +156,44 @@ class SQLiteLogHandler(logging.Handler):
                     if nxt is None:
                         stop_after_batch = True
                         break
+                    if isinstance(nxt, _FlushRequest):
+                        flush_events.append(nxt.done)
+                        break
                     batch.append(nxt)
 
                 try:
+                    if conn is None:
+                        conn = self._connect()
                     conn.executemany(_INSERT_SQL, batch)
                     conn.commit()
                 except Exception as exc:
                     print(f"[SQLiteLogHandler] Falha ao gravar lote em {self.db_path}: {exc}", file=sys.stderr)
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        conn = None
+
+                if flush_events or stop_after_batch or self._queue.empty():
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                        conn = None
+
+                for ev in flush_events:
+                    ev.set()
 
                 if stop_after_batch:
                     break
         finally:
-            conn.close()
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def emit(self, record: logging.LogRecord) -> None:
         if self._closed:
@@ -144,15 +210,46 @@ class SQLiteLogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
+    def flush(self) -> None:
+        """Aguarda a gravação de todos os registros pendentes na fila."""
+        if self._closed or not self._writer.is_alive():
+            return
+        if threading.current_thread() is self._writer:
+            return
+        req = _FlushRequest()
+        try:
+            self._queue.put(req, timeout=1.5)
+            req.done.wait(timeout=3.0)
+        except Full:
+            pass
+
     def close(self) -> None:
+        """
+        Drena registros pendentes sem encerrar o worker prematuramente quando invocado por
+        `logging.config.dictConfig` / `_clearExistingHandlers` (Uvicorn).
+        """
+        self.flush()
+        if self._shutting_down:
+            super().close()
+
+    def close_handler(self, force: bool = False) -> None:
+        """Fecha o handler opcionalmente forçando o desligamento definitivo da thread."""
+        if force:
+            self.shutdown()
+        else:
+            self.close()
+
+    def shutdown(self) -> None:
+        """Encerra definitivamente a thread de escrita SQLite (registrado via atexit)."""
         with self._close_lock:
             if self._closed:
                 return
+            self._shutting_down = True
             self._closed = True
         try:
             self._queue.put(None, timeout=1.0)
         except Full:
             pass
-        if self._writer.is_alive():
+        if self._writer.is_alive() and threading.current_thread() is not self._writer:
             self._writer.join(timeout=3.0)
         super().close()

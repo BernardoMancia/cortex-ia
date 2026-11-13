@@ -433,6 +433,63 @@ class SentimentAnalyzer:
             self.mode, int(self.cache_ttl),
         )
 
+    @property
+    def _gemini_client(self) -> Any:
+        return self._genai_client
+
+    @_gemini_client.setter
+    def _gemini_client(self, value: Any) -> None:
+        self._genai_client = value
+
+    def _wait_gemini_rate_limit(self) -> None:
+        """Aplica rate-limiting thread-safe entre chamadas à Gemini Interactions API."""
+        sleep_time = 0.0
+        with self._lock:
+            now_mono = time.monotonic()
+            if self._last_gemini_call > 0.0:
+                elapsed_gemini = now_mono - self._last_gemini_call
+                if elapsed_gemini < _GEMINI_MIN_INTERVAL_SECONDS:
+                    sleep_time = _GEMINI_MIN_INTERVAL_SECONDS - elapsed_gemini
+            self._last_gemini_call = now_mono + sleep_time
+        if sleep_time > 0.0:
+            logger.debug("Rate limiter Gemini: aguardando %.2fs...", sleep_time)
+            time.sleep(sleep_time)
+
+    def _call_gemini_score(self, untrusted_block: str, context_label: str = "texto") -> Optional[float]:
+        """Executa chamada pontual ao Gemini e retorna o score em [-1.0, 1.0] ou None."""
+        client = self._gemini_client
+        if client is None:
+            return None
+        self._wait_gemini_rate_limit()
+        user_prompt = (
+            "Avalie o sentimento financeiro para o mercado de ações brasileiro (B3) "
+            "das manchetes/trechos delimitados abaixo.\n\n"
+            f"<untrusted_headlines>\n{untrusted_block}\n</untrusted_headlines>\n\n"
+            "Retorne apenas o JSON de avaliação de sentimento."
+        )
+        text_response = ""
+        for model_name in GEMINI_MODELS:
+            try:
+                candidate = client.interactions.create(
+                    model=model_name,
+                    input=user_prompt,
+                    system_instruction=_GEMINI_SYSTEM_INSTRUCTION,
+                    store=False,
+                )
+                extracted = _extract_interaction_text(candidate)
+                if extracted:
+                    text_response = extracted
+                    break
+            except Exception as err:
+                logger.warning(
+                    "Modelo Gemini %s falhou na avaliação de %s (%s); tentando próximo...",
+                    model_name, context_label, err,
+                )
+        if not text_response:
+            return None
+        data = _parse_gemini_json(text_response)
+        return clamp(float(data.get("score", 0.0)), -1.0, 1.0)
+
     def _load_finbert(self) -> None:
         """Carrega o pipeline FinBERT-PT-BR de forma lazy."""
         if self._pipeline is not None:
@@ -461,6 +518,17 @@ class SentimentAnalyzer:
         """Analisa o sentimento de um texto individual em [-1.0, 1.0]."""
         if not text or not text.strip():
             return 0.0
+
+        if self.mode == "gemini" and self._gemini_client is not None:
+            try:
+                safe_text = _sanitize_untrusted_headline(text, max_len=500)
+                if safe_text:
+                    gem_score = self._call_gemini_score(f"- {safe_text}", context_label="texto")
+                    if gem_score is not None:
+                        return gem_score
+            except Exception as exc:
+                logger.warning("Fallback léxico em analyze_text após erro Gemini: %s", exc)
+            return self._analyze_text_lightweight(text)
 
         if self.mode == "full":
             return self._analyze_text_finbert(text)
@@ -501,7 +569,7 @@ class SentimentAnalyzer:
         text_lower = text.lower()
         consumed_spans: list[tuple[int, int]] = []
         total_score = 0.0
-        match_count = 0
+        total_weight: float = 0.0
 
         def _overlaps(s: int, e: int) -> bool:
             return any(not (e <= cs or s >= ce) for cs, ce in consumed_spans)
@@ -514,20 +582,21 @@ class SentimentAnalyzer:
                     continue
                 consumed_spans.append((start, end))
                 effective_score = -base_score if _is_negated_before(text_lower, start) else base_score
-                total_score += effective_score / (occurrence_idx + 1)
+                weight = 1.0 / (occurrence_idx + 1)
+                total_score += effective_score * weight
+                total_weight += weight
                 occurrence_idx += 1
-                match_count += 1
 
-        if match_count == 0:
+        if total_weight == 0.0:
             return 0.0
 
-        normalized = total_score / match_count
+        normalized = total_score / total_weight
         return clamp(normalized, -1.0, 1.0)
 
-    def analyze_news_batch(self, news_items: list[NewsItem]) -> float:
+    def _analyze_news_batch_local(self, news_items: list[NewsItem]) -> float:
         """
-        Analisa sentimento de uma lista de notícias com ponderação exponencial
-        por recência (60% título / 40% resumo quando ambos disponíveis).
+        Analisa sentimento local (léxico/FinBERT) de uma lista de notícias com
+        ponderação exponencial por recência (60% título / 40% resumo).
         """
         if not news_items:
             logger.debug("Nenhuma notícia para análise de sentimento em lote.")
@@ -572,6 +641,37 @@ class SentimentAnalyzer:
         )
         return clamp(result, -1.0, 1.0)
 
+    def analyze_news_batch(self, news_items: list[NewsItem]) -> float:
+        """
+        Analisa sentimento de uma lista de notícias. Em modo `gemini`, consulta
+        a Gemini Interactions API com fallback resiliente para o léxico local.
+        """
+        if not news_items:
+            logger.debug("Nenhuma notícia para análise de sentimento em lote.")
+            return 0.0
+
+        if self.mode == "gemini" and self._gemini_client is not None:
+            try:
+                lines: list[str] = []
+                for item in news_items[:10]:
+                    safe_title = _sanitize_untrusted_headline(getattr(item, "title", ""), max_len=160)
+                    safe_summary = _sanitize_untrusted_headline(getattr(item, "summary", ""), max_len=200)
+                    safe_source = _sanitize_untrusted_headline(getattr(item, "source", ""), max_len=50)
+                    if safe_title:
+                        entry_line = f"- {safe_title}"
+                        if safe_summary:
+                            entry_line += f" — {safe_summary}"
+                        entry_line += f" (Fonte: {safe_source or 'N/A'})"
+                        lines.append(entry_line)
+                if lines:
+                    gem_score = self._call_gemini_score("\n".join(lines), context_label="lote de notícias")
+                    if gem_score is not None:
+                        return gem_score
+            except Exception as exc:
+                logger.warning("Fallback léxico em analyze_news_batch após erro Gemini: %s", exc)
+
+        return self._analyze_news_batch_local(news_items)
+
     def _analyze_single_text(self, text: str, is_title: bool = False) -> float:
         """Despacha análise de texto individual conforme modo ativo."""
         if not text or not text.strip():
@@ -594,7 +694,7 @@ class SentimentAnalyzer:
                 reasoning=f"Nenhuma notícia local encontrada para {ticker}. Sentimento neutro.",
             )
 
-        batch_score = self.analyze_news_batch(news_items)
+        batch_score = self._analyze_news_batch_local(news_items)
         label = self._score_to_label(batch_score)
         confidence = self._calculate_confidence(batch_score, len(news_items))
         sorted_news = sorted(

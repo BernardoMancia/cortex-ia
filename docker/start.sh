@@ -18,7 +18,27 @@ MT5_HASH_DIR="${MT5_APPDATA_ROOT}/D0E8209F77C8CF37AD8BF550E51FF075"
 MT5_COMMON_FILES="${MT5_APPDATA_ROOT}/Common/Files"
 export CORTEX_MQL5_RPC_DIR="${MT5_COMMON_FILES}/cortex_rpc"
 
-mkdir -p "${CORTEX_MQL5_RPC_DIR}"
+SUPERVISOR_PID=""
+BRIDGE_PID=""
+
+cleanup_container() {
+    echo "[MT5-BRIDGE] Sinal de encerramento recebido — finalizando FastAPI Bridge e Wine/MT5..."
+    if [ -n "${SUPERVISOR_PID}" ]; then
+        kill "${SUPERVISOR_PID}" >/dev/null 2>&1 || true
+    fi
+    if [ -n "${BRIDGE_PID}" ]; then
+        kill -TERM "${BRIDGE_PID}" >/dev/null 2>&1 || true
+    fi
+    pkill -f '[t]erminal64\.exe' >/dev/null 2>&1 || true
+    wineserver -k >/dev/null 2>&1 || true
+    if [ -n "${BRIDGE_PID}" ]; then
+        wait "${BRIDGE_PID}" 2>/dev/null || true
+    fi
+    exit 0
+}
+trap cleanup_container TERM INT
+
+mkdir -p "${CORTEX_MQL5_RPC_DIR}" "${MT5_APPDATA_ROOT}"
 find "${CORTEX_MQL5_RPC_DIR}" -maxdepth 1 -type f \( -name "req_*.cmd" -o -name "resp_*.json" -o -name "*.tmp" \) -delete || true
 
 rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 || true
@@ -93,6 +113,31 @@ run_installer_attempt() {
     return 1
 }
 
+sync_mt5_appdata_profiles() {
+    mkdir -p "${MT5_HASH_DIR}/config" "${MT5_HASH_DIR}/MQL5/Experts"
+    for prof_dir in "${MT5_APPDATA_ROOT}"/*; do
+        [ -d "${prof_dir}" ] || continue
+        local base_prof
+        base_prof="$(basename "${prof_dir}")"
+        if [ "${base_prof}" = "Common" ] || [ "${base_prof}" = "Community" ]; then
+            continue
+        fi
+        if [ -f "${MT5_DIR}/Config/servers.dat" ]; then
+            mkdir -p "${prof_dir}/config"
+            if [ ! -f "${prof_dir}/config/servers.dat" ] || [ "$(stat -c%s "${MT5_DIR}/Config/servers.dat")" -gt "$(stat -c%s "${prof_dir}/config/servers.dat")" ]; then
+                cp -f "${MT5_DIR}/Config/servers.dat" "${prof_dir}/config/servers.dat" || true
+            fi
+        fi
+        if [ -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" ]; then
+            mkdir -p "${prof_dir}/MQL5/Experts"
+            cp -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" "${prof_dir}/MQL5/Experts/CortexBridgeEA.ex5" || true
+            if [ -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.mq5" ]; then
+                cp -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.mq5" "${prof_dir}/MQL5/Experts/CortexBridgeEA.mq5" || true
+            fi
+        fi
+    done
+}
+
 if [ ! -f "${MT5_EXE}" ]; then
     echo "[MT5-BRIDGE] MetaTrader 5 não encontrado no volume. Iniciando instalação automática..."
     if ! run_installer_attempt "/opt/mt5/clearsetup.exe" "Clear/XP MT5"; then
@@ -107,7 +152,7 @@ if [ ! -f "${MT5_EXE}" ]; then
     fi
 fi
 
-# Semeia e propaga catálogo oficial de servidores B3 (ClearInvestimentos-CLEAR / DEMO / XP / Rico)
+# Semeia catálogo oficial de servidores B3 (ClearInvestimentos-CLEAR / DEMO / XP / Rico)
 if [ -f "/opt/mt5/servers.dat" ]; then
     mkdir -p "${MT5_DIR}/Config"
     if [ ! -f "${MT5_DIR}/Config/servers.dat" ] || [ "$(stat -c%s "/opt/mt5/servers.dat")" -gt "$(stat -c%s "${MT5_DIR}/Config/servers.dat")" ]; then
@@ -115,85 +160,95 @@ if [ -f "/opt/mt5/servers.dat" ]; then
         echo "[MT5-BRIDGE] Catálogo oficial B3 (Clear/XP/Rico) provisionado em '${MT5_DIR}/Config/servers.dat'."
     fi
 fi
-if [ -f "${MT5_DIR}/Config/servers.dat" ]; then
-    mkdir -p "${MT5_HASH_DIR}/config"
-    if [ ! -f "${MT5_HASH_DIR}/config/servers.dat" ] || [ "$(stat -c%s "${MT5_DIR}/Config/servers.dat")" -gt "$(stat -c%s "${MT5_HASH_DIR}/config/servers.dat")" ]; then
-        cp -f "${MT5_DIR}/Config/servers.dat" "${MT5_HASH_DIR}/config/servers.dat"
-        echo "[MT5-BRIDGE] Catálogo servers.dat sincronizado para o perfil AppData do MT5."
-    fi
-    for d in "${MT5_APPDATA_ROOT}"/*/config; do
-        if [ -d "${d}" ] && [ "${d}" != "${MT5_HASH_DIR}/config" ]; then
-            cp -f "${MT5_DIR}/Config/servers.dat" "${d}/servers.dat" || true
-        fi
-    done
-fi
 
 # Instala e compila o Expert Advisor CortexBridgeEA.mq5 -> CortexBridgeEA.ex5 para RPC local 0ms
 METAEDITOR_EXE="$(find "${MT5_DIR}" -maxdepth 1 -iname "metaeditor64.exe" 2>/dev/null | head -n 1 || true)"
 if [ -f "/opt/mt5/CortexBridgeEA.mq5" ] && [ -n "${METAEDITOR_EXE}" ]; then
     mkdir -p "${MT5_DIR}/MQL5/Experts" "${MT5_HASH_DIR}/MQL5/Experts"
-    cp -f "/opt/mt5/CortexBridgeEA.mq5" "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.mq5"
-    echo "[MT5-BRIDGE] Compilando CortexBridgeEA.mq5 via ${METAEDITOR_EXE}..."
-    wine "${METAEDITOR_EXE}" '/compile:C:\Program Files\MetaTrader 5\MQL5\Experts\CortexBridgeEA.mq5' '/log:C:\cortex_ea_compile.log' >/dev/null 2>&1 || true
     if [ -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" ]; then
+        cp -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5.bak" || true
+        rm -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" || true
+    fi
+    cp -f "/opt/mt5/CortexBridgeEA.mq5" "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.mq5"
+    rm -f "${MT5_DIR}/MQL5/Experts/compile.log" || true
+    echo "[MT5-BRIDGE] Compilando CortexBridgeEA.mq5 via ${METAEDITOR_EXE}..."
+    (cd "${MT5_DIR}" && wine ./MetaEditor64.exe '/compile:MQL5\Experts\CortexBridgeEA.mq5' '/log:MQL5\Experts\compile.log' >/dev/null 2>&1) || true
+
+    compile_elapsed=0
+    while [ "${compile_elapsed}" -lt 30 ]; do
+        if [ -s "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" ]; then
+            break
+        fi
+        sleep 0.5
+        compile_elapsed=$((compile_elapsed + 1))
+    done
+
+    if [ -s "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" ]; then
+        rm -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5.bak" || true
         echo "[MT5-BRIDGE] CortexBridgeEA.ex5 compilado com sucesso."
-        for mql_dir in "${MT5_APPDATA_ROOT}"/*/MQL5; do
-            if [ -d "${mql_dir}" ]; then
-                mkdir -p "${mql_dir}/Experts"
-                cp -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.mq5" "${mql_dir}/Experts/CortexBridgeEA.mq5"
-                cp -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" "${mql_dir}/Experts/CortexBridgeEA.ex5"
-            fi
-        done
     else
-        echo "[MT5-BRIDGE] AVISO: Falha ao compilar CortexBridgeEA.ex5 — verifique C:\\cortex_ea_compile.log."
+        if [ -s "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5.bak" ]; then
+            mv -f "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5.bak" "${MT5_DIR}/MQL5/Experts/CortexBridgeEA.ex5" || true
+            echo "[MT5-BRIDGE] AVISO: Compilação nova não gerou .ex5 em 10s; restaurando binário anterior."
+        else
+            echo "[MT5-BRIDGE] AVISO: Falha ao compilar CortexBridgeEA.ex5 — verifique C:\\cortex_ea_compile.log."
+        fi
     fi
 fi
+
+sync_mt5_appdata_profiles
 
 STARTUP_INI="/root/.wine/drive_c/mt5_startup.ini"
 SERVER_NAME="${MT5_SERVER:-ClearInvestimentos-CLEAR}"
 STARTUP_SYMBOL="${MT5_STARTUP_SYMBOL:-EURUSD}"
 STARTUP_PERIOD="${MT5_STARTUP_PERIOD:-H1}"
+
+{
+    printf '%s\n' "[Common]"
+    if [ -n "${MT5_LOGIN:-}" ] && [ -n "${MT5_PASSWORD:-}" ]; then
+        printf '%s\n' "Login=${MT5_LOGIN}"
+        printf '%s\n' "Password=${MT5_PASSWORD}"
+        printf '%s\n' "KeepPrivate=1"
+    fi
+    printf '%s\n' "Server=${SERVER_NAME}"
+    printf '%s\n' "NewsEnable=0"
+    printf '%s\n' "CertInstall=1"
+    printf '\n'
+    printf '%s\n' "[Experts]"
+    printf '%s\n' "AllowDllImport=1"
+    printf '%s\n' "Enabled=1"
+    printf '%s\n' "Account=0"
+    printf '%s\n' "Profile=0"
+    printf '%s\n' "Chart=0"
+    printf '%s\n' "Api=0"
+    printf '\n'
+    printf '%s\n' "[StartUp]"
+    printf '%s\n' "Expert=CortexBridgeEA"
+    printf '%s\n' "Symbol=${STARTUP_SYMBOL}"
+    printf '%s\n' "Period=${STARTUP_PERIOD}"
+} > "${STARTUP_INI}"
+chmod 600 "${STARTUP_INI}"
+
 if [ -n "${MT5_LOGIN:-}" ] && [ -n "${MT5_PASSWORD:-}" ]; then
-    cat > "${STARTUP_INI}" <<EOF
-[Common]
-Login=${MT5_LOGIN}
-Password=${MT5_PASSWORD}
-Server=${SERVER_NAME}
-KeepPrivate=1
-NewsEnable=0
-CertInstall=1
-
-[Experts]
-AllowDllImport=1
-Enabled=1
-Account=0
-Profile=0
-Chart=0
-Api=0
-
-[StartUp]
-Expert=CortexBridgeEA
-Symbol=${STARTUP_SYMBOL}
-Period=${STARTUP_PERIOD}
-EOF
-    chmod 600 "${STARTUP_INI}"
     echo "[MT5-BRIDGE] Perfil headless auto-login + Algo Trading + CortexBridgeEA configurado (${SERVER_NAME} / ${STARTUP_SYMBOL})."
+else
+    echo "[MT5-BRIDGE] Perfil headless Algo Trading + CortexBridgeEA configurado (${SERVER_NAME} / ${STARTUP_SYMBOL}); aguardando credenciais MT5."
 fi
 
 # Supervisor em background mantendo uma única instância de terminal64.exe viva 24/7
 (
     while true; do
         if [ -f "${MT5_EXE}" ] && ! pgrep -f '[t]erminal64\.exe' >/dev/null 2>&1; then
+            sync_mt5_appdata_profiles
             echo "[MT5-BRIDGE] Iniciando terminal64.exe em modo headless..."
-            if [ -f "${STARTUP_INI}" ]; then
-                wine "${MT5_EXE}" /skipupdate '/config:C:\mt5_startup.ini' >/tmp/mt5_terminal.log 2>&1 &
-            else
-                wine "${MT5_EXE}" /skipupdate >/tmp/mt5_terminal.log 2>&1 &
-            fi
+            wine "${MT5_EXE}" /skipupdate '/config:C:\mt5_startup.ini' >/tmp/mt5_terminal.log 2>&1 &
         fi
         sleep 15
     done
 ) &
+SUPERVISOR_PID=$!
 
 echo "[MT5-BRIDGE] Iniciando API FastAPI Bridge nativa em ${BRIDGE_HOST}:${BRIDGE_PORT}..."
-exec /opt/bridge-venv/bin/python -m bridge.app
+/opt/bridge-venv/bin/python -m bridge.app &
+BRIDGE_PID=$!
+wait "${BRIDGE_PID}"

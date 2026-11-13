@@ -180,21 +180,65 @@ class SimulatorBroker(BrokerBase):
             )
             for raw_key, pos_data in items:
                 qty = int(pos_data["quantity"])
+                if qty <= 0:
+                    continue
+                raw_ticker = str(pos_data.get("ticker") or raw_key)
                 sym = format_b3_ticker_for_quantity(
-                    str(pos_data.get("ticker") or raw_key),
+                    raw_ticker,
                     quantity=max(1, qty),
                 )
                 if not sym:
                     continue
-                self._positions[sym] = {
-                    "ticker": sym,
-                    "quantity": qty,
-                    "entry_price": float(pos_data["entry_price"]),
-                    "stop_loss": float(pos_data.get("stop_loss", 0.0)),
-                    "ticket": int(pos_data.get("ticket", 0)),
-                    "timestamp": str(pos_data.get("timestamp", datetime.now(tz=BRT).isoformat())),
-                    "partial_exit_done": bool(pos_data.get("partial_exit_done", False)),
-                }
+                base_norm = normalize_b3_ticker(sym) or sym
+                entry_px = float(pos_data["entry_price"])
+                sl_px = float(pos_data.get("stop_loss", 0.0))
+                tkt = int(pos_data.get("ticket", 0))
+                ts_str = str(pos_data.get("timestamp", datetime.now(tz=BRT).isoformat()))
+                p_done = bool(pos_data.get("partial_exit_done", False))
+
+                existing_key = next(
+                    (k for k in self._positions if (normalize_b3_ticker(k) or k) == base_norm),
+                    None,
+                )
+                if existing_key is not None:
+                    prev = self._positions.pop(existing_key)
+                    prev_qty = int(prev["quantity"])
+                    merged_qty = prev_qty + qty
+                    merged_sym = (
+                        format_b3_ticker_for_quantity(base_norm, quantity=max(1, merged_qty))
+                        or sym
+                    )
+                    merged_entry = round(
+                        ((float(prev["entry_price"]) * prev_qty) + (entry_px * qty))
+                        / merged_qty,
+                        2,
+                    )
+                    pos_sls = [s for s in (float(prev["stop_loss"]), sl_px) if s > 0]
+                    merged_sl = min(pos_sls) if pos_sls else 0.0
+                    pos_tkts = [t for t in (int(prev["ticket"]), tkt) if t > 0]
+                    merged_tkt = min(pos_tkts) if pos_tkts else 0
+                    merged_ts = min(str(prev["timestamp"]), ts_str)
+                    self._positions[merged_sym] = {
+                        "ticker": merged_sym,
+                        "quantity": merged_qty,
+                        "entry_price": merged_entry,
+                        "stop_loss": merged_sl,
+                        "ticket": merged_tkt,
+                        "timestamp": merged_ts,
+                        "partial_exit_done": bool(
+                            prev.get("partial_exit_done", False) or p_done
+                        ),
+                    }
+                else:
+                    self._positions[sym] = {
+                        "ticker": sym,
+                        "quantity": qty,
+                        "entry_price": entry_px,
+                        "stop_loss": sl_px,
+                        "ticket": tkt,
+                        "timestamp": ts_str,
+                        "partial_exit_done": p_done,
+                    }
 
             logger.info(
                 "Estado restaurado — saldo: R$%.2f, posições: %d, próximo ticket: %d",
@@ -330,7 +374,52 @@ class SimulatorBroker(BrokerBase):
             )
 
         rounded_price = round(float(price), 2)
+        if rounded_price <= 0:
+            msg = "Preço unitário arredondado deve ser maior que zero"
+            logger.warning("Compra rejeitada — %s", msg)
+            return Order(
+                ticker=symbol or ticker,
+                order_type=OrderType.BUY,
+                quantity=quantity,
+                price=0.0,
+                stop_loss=stop_loss,
+                status=OrderStatus.REJECTED,
+                timestamp=now,
+                comment=msg,
+            )
+
+        if stop_loss is not None and float(stop_loss) < 0:
+            msg = f"Stop-loss inválido: R${float(stop_loss):.2f}"
+            logger.warning("Compra rejeitada — %s", msg)
+            return Order(
+                ticker=symbol,
+                order_type=OrderType.BUY,
+                quantity=quantity,
+                price=rounded_price,
+                stop_loss=0.0,
+                status=OrderStatus.REJECTED,
+                timestamp=now,
+                comment=msg,
+            )
+
         rounded_sl = round(float(stop_loss), 2) if stop_loss and stop_loss > 0 else 0.0
+        if rounded_sl >= rounded_price:
+            msg = (
+                f"Stop-loss inválido: R${rounded_sl:.2f} deve ser estritamente menor "
+                f"que o preço de compra R${rounded_price:.2f}"
+            )
+            logger.warning("Compra rejeitada — %s", msg)
+            return Order(
+                ticker=symbol,
+                order_type=OrderType.BUY,
+                quantity=quantity,
+                price=rounded_price,
+                stop_loss=rounded_sl,
+                status=OrderStatus.REJECTED,
+                timestamp=now,
+                comment=msg,
+            )
+
         total_cost = round(quantity * rounded_price, 2)
 
         with self._lock:

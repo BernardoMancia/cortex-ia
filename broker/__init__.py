@@ -54,6 +54,14 @@ def create_broker(mode: str | None = None) -> BrokerBase:
     if mode_clean in ("simulator", "sim", "paper", "simulador"):
         return SimulatorBroker()
 
+    if mode_clean in ("bridge", "rest_mt5"):
+        bridge_url = getattr(settings, "MT5_BRIDGE_URL", "").strip()
+        if not bridge_url:
+            raise ValueError(
+                f"Modo '{mode}' requer MT5_BRIDGE_URL configurado no ambiente."
+            )
+        return RestMT5Broker(base_url=bridge_url)
+
     if mode_clean in ("mt5", "metatrader", "metatrader5", "real"):
         bridge_url = getattr(settings, "MT5_BRIDGE_URL", "").strip()
         if bridge_url:
@@ -65,7 +73,7 @@ def create_broker(mode: str | None = None) -> BrokerBase:
         )
 
     raise ValueError(
-        f"Modo de broker desconhecido: '{mode}'. Use 'simulator' ou 'mt5'."
+        f"Modo de broker desconhecido: '{mode}'. Use 'simulator', 'mt5' ou 'bridge'."
     )
 
 

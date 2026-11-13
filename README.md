@@ -1,4 +1,4 @@
-# Córtex IA — v2.9.0
+# Córtex IA — v2.9.1
 
 **[🇧🇷 Português (PT-BR)](#-português-pt-br) | [🇺🇸 English](#-english)**
 
@@ -8,13 +8,13 @@
 
 **Sistema Autônomo de Inteligência Quantitativa, Algorithmic Trading, Sentimento com Gemini Interactions API e Dashboard Seguro para a B3**
 
-O **Córtex IA (v2.9.0)** é um ecossistema autônomo de negociação quantitativa e gestão de portfólio para o mercado de ações brasileiro (**B3**). O motor opera continuamente combinando **Análise Técnica Multitemporal**, **Análise de Sentimento de Notícias em Tempo Real** (com suporte nativo à **Gemini 3.5 / 3.8 Interactions API** via `google-genai>=2.30.1` e fallback léxico local), **Gerenciamento de Risco Dinâmico** (Trailing Stop, Stop-Loss e limites de concentração), **Segregação Estrita Homologação vs. Produção** (com Cofre de Reserva) e um **Dashboard Web Mobile-First com Autenticação de Nível Bancário**.
+O **Córtex IA (v2.9.1)** é um ecossistema autônomo de negociação quantitativa e gestão de portfólio para o mercado de ações brasileiro (**B3**). O motor opera continuamente combinando **Análise Técnica Multitemporal**, **Análise de Sentimento de Notícias em Tempo Real** (com suporte nativo à **Gemini 3.5 / 3.8 Interactions API** via `google-genai>=2.30.1` e fallback léxico local), **Gerenciamento de Risco Dinâmico** (Trailing Stop, Stop-Loss e limites de concentração), **Segregação Estrita Homologação vs. Produção** (com Cofre de Reserva e Liquidação B3 `D+2`) e um **Dashboard Web Mobile-First com Autenticação de Nível Bancário**.
 
 Monitora continuamente o universo de **ações de alta liquidez da B3** (mais de 100 ativos configuráveis via `WATCHLIST_PORTFOLIO`, com roteamento inteligente entre lote padrão e mercado fracionário como `PETR4` e `PETR4F`), gerencia ordens e posições em tempo real e oferece operação híbrida via `SimulatorBroker`, `MT5Broker` (Windows) ou `MT5 REST Bridge` autenticada por chave (`BRIDGE_API_KEY`).
 
 ---
 
-### 🌟 Funcionalidades Principais (v2.9.0)
+### 🌟 Funcionalidades Principais (v2.9.1)
 
 - **Segurança Web e Autenticação de Nível Bancário**:
   - **Hashing Criptográfico Forte**: Senhas protegidas com **PBKDF2-HMAC-SHA256** e *salt* exclusivo por usuário.
@@ -34,7 +34,7 @@ Monitora continuamente o universo de **ações de alta liquidez da B3** (mais de
 - **Execução Multi-Broker & MT5 Bridge Protegida**:
   - `simulator`: Paper trading de alta fidelidade com persistência transacional.
   - `mt5`: Execução nativa direta via terminal MetaTrader 5 no Windows (`ClearInvestimentos-CLEAR`).
-  - `bridge`: Comunicação HTTP REST autenticada via header `X-API-Key` (`BRIDGE_API_KEY`) com o servidor `bridge/app.py` (Windows ou container Docker/Wine isolado em `127.0.0.1:5000` e noVNC autenticado em `127.0.0.1:6080`).
+  - `bridge`: Comunicação HTTP REST autenticada via header `X-Bridge-Api-Key` (`BRIDGE_API_KEY`) com o servidor `bridge/app.py` (Windows ou container Docker/Wine isolado em `127.0.0.1:5000` e noVNC autenticado em `127.0.0.1:6080`).
 - **Backtesting & Relatórios**:
   - Motor de backtesting histórico com métricas quantitativas e geração de gráficos via `matplotlib`.
   - Alertas operacionais e resumos diários via Telegram (`TELEGRAM_CHAT_ID` / `TELEGRAM_CHANNEL_ID`).
@@ -45,7 +45,7 @@ Monitora continuamente o universo de **ações de alta liquidez da B3** (mais de
 
 ```text
 +----------------------------------------------------------------------------+
-|                             CÓRTEX IA v2.9.0                               |
+|                             CÓRTEX IA v2.9.1                               |
 +----------------------------------------------------------------------------+
 |  +----------------+    +--------------------+    +---------------------+   |
 |  |   MarketData   |    |    NewsScraper     |    |      Portfolio      |   |
@@ -138,8 +138,9 @@ TRAILING_STOP_DISTANCE_PERCENT=0.015
 SENTIMENT_MODE=lightweight
 GEMINI_API_KEY=
 
-# Segurança da Bridge MT5 (obrigatório quando BROKER_MODE=bridge)
-MT5_BRIDGE_URL=http://127.0.0.1:5000
+# Segurança da Bridge MT5 (descomente MT5_BRIDGE_URL quando BROKER_MODE=bridge)
+# MT5_BRIDGE_URL=http://127.0.0.1:5000
+MT5_STARTUP_SYMBOL=EURUSD
 BRIDGE_API_KEY=gere_um_token_aleatorio_forte_aqui
 
 # Dashboard & Sessão
@@ -177,6 +178,22 @@ python main.py --verbose
 - `bash scripts/backup.sh` — Gera backup atômico de `data/cortex.db`, `simulator_state.json` e `prod_simulator_state.json`.
 - `bash deploy/setup.sh` — Provisionamento completo de VPS Linux (`.venv`, serviço unificado `cortex-ia.service` e `logrotate`).
 
+#### Container Docker `mt5-bridge` & Túnel SSH `6080` (Linux / VPS):
+Para operar com conta real na B3 em servidor Linux via container Wine/MT5 headless (`docker/docker-compose.yml`), mantendo a API (`127.0.0.1:5000`) e o painel diagnóstico noVNC (`127.0.0.1:6080`) estritamente restritos ao loopback local:
+
+1. **Subir / atualizar o container `mt5-bridge` na VPS:**
+   ```bash
+   cd docker
+   docker compose --env-file ../.env up -d --build
+   curl -H "X-Bridge-Api-Key: $BRIDGE_API_KEY" http://127.0.0.1:5000/health
+   ```
+2. **Inspecionar o terminal MetaTrader 5 via túnel SSH seguro (porta `6080`):**
+   No seu computador local, abra um túnel SSH encaminhando apenas `127.0.0.1:6080`:
+   ```bash
+   ssh -L 6080:127.0.0.1:6080 seu_usuario@ip_servidor
+   ```
+   Em seguida, acesse `http://localhost:6080/vnc.html` no navegador local e informe `VNC_PASSWORD` (caso tenha 2FA/token inicial da corretora, autentique uma única vez; a sessão fica persistida no volume Docker `mt5-data`).
+
 #### Acesso ao Dashboard & Recuperação de Senha:
 - **Local:** `http://localhost:8003`
 - **Servidor / VPS:** `http://ip_servidor:8003`
@@ -203,17 +220,17 @@ A suíte completa utiliza `pytest`, `pytest-asyncio` e `httpx` para validar aute
 
 **Autonomous Quantitative Intelligence, Algorithmic Trading, Gemini Interactions API Sentiment & Bank-Grade Web Dashboard for B3 (Brazilian Stock Exchange)**
 
-**Córtex IA (v2.9.0)** is an autonomous quantitative trading and portfolio management platform built for the Brazilian equity market (**B3**). It combines **Multi-Timeframe Technical Analysis**, **Financial News Sentiment Analysis** (powered by the **Gemini 3.5 / 3.8 Interactions API** via `google-genai>=2.30.1` with automatic local lexical fallback), **Dynamic Risk Management** (Trailing Stop, Stop-Loss, concentration caps, and daily circuit breakers), **Strict Homologation vs. Production Capital Isolation** (with Reserve Vault protection), and a **Mobile-First Real-Time Web Dashboard**.
+**Córtex IA (v2.9.1)** is an autonomous quantitative trading and portfolio management platform built for the Brazilian equity market (**B3**). It combines **Multi-Timeframe Technical Analysis**, **Financial News Sentiment Analysis** (powered by the **Gemini 3.5 / 3.8 Interactions API** via `google-genai>=2.30.1` with automatic local lexical fallback), **Dynamic Risk Management** (Trailing Stop, Stop-Loss, concentration caps, and daily circuit breakers), **Strict Homologation vs. Production Capital Isolation** (with Reserve Vault and `D+2` B3 settlement tracking), and a **Mobile-First Real-Time Web Dashboard**.
 
-### Key Highlights (v2.9.0)
+### Key Highlights (v2.9.1)
 
 - **Bank-Grade Authentication & Hardened Web Layer**:
   - **PBKDF2-HMAC-SHA256** password hashing with per-user cryptographic salt, parameterized SQLite queries (WAL mode), brute-force IP/account lockout, mandatory first-login credential rotation (`Admin` / `Admin`), strict `ALLOWED_ORIGINS` / `COOKIE_SECURE` controls, and authenticated WebSockets.
 - **Gemini 3.5 / 3.8 Interactions API Sentiment Engine**:
   - Supports `SENTIMENT_MODE=gemini` using `google-genai>=2.30.1` (`client.interactions.create`) with TTL caching (`SENTIMENT_CACHE_TTL`) and seamless fallback to the zero-dependency `lightweight` financial lexicon analyzer.
 - **Hybrid Execution & Authenticated MT5 Bridge**:
-  - Supports `SimulatorBroker` (dual JSON + SQLite persistence), native Windows `MT5Broker` (`ClearInvestimentos-CLEAR`), and `MT5 REST Bridge` secured via `X-API-Key` (`BRIDGE_API_KEY`).
-  - Dockerized Wine/MT5 bridge (`docker/docker-compose.yml`) binds strictly to loopback (`127.0.0.1:5000` API and `127.0.0.1:6080` noVNC protected by `VNC_PASSWORD`).
+  - Supports `SimulatorBroker` (dual JSON + SQLite persistence), native Windows `MT5Broker` (`ClearInvestimentos-CLEAR`), and `MT5 REST Bridge` secured via `X-Bridge-Api-Key` (`BRIDGE_API_KEY`).
+  - Dockerized Wine/MT5 bridge (`docker/docker-compose.yml`) binds strictly to loopback (`127.0.0.1:5000` API and `127.0.0.1:6080` noVNC protected by `VNC_PASSWORD`; inspectable remotely via `ssh -L 6080:127.0.0.1:6080 user@your_server_ip` -> `http://localhost:6080/vnc.html`).
 - **Safe DevOps & Zero-Leak Git Sync**:
   - `scripts/deploy.py` performs pre-deploy backups on the remote server and strictly protects live `data/*.db*` and `data/*.json`.
   - `scripts/sync_git.py` synchronizes production code (including `data/*.py`), prunes stale files, and runs an automated secret/IP scanner before any commit; remote pushes require explicit `--push`.

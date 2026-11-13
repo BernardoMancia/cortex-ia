@@ -38,6 +38,7 @@ let csrfToken = '';
             response.status === 401 &&
             !urlStr.includes('/api/auth/login') &&
             !urlStr.includes('/api/auth/first-login') &&
+            !urlStr.includes('/api/auth/logout') &&
             !urlStr.includes('/api/auth/me') &&
             !window.location.pathname.startsWith('/login')
         ) {
@@ -98,10 +99,12 @@ let state = {
     capitalSummary: null,
     simulationSummary: null,
     productionSummary: null,
+    stopLossPct: 0.10,
+    _txEnvInitialized: false,
     riskParams: {
-        stop_loss_percent: 7.5,
-        trailing_trigger_percent: 3.5,
-        trailing_distance_percent: 2.0
+        stop_loss_percent: 10.0,
+        trailing_trigger_percent: 2.0,
+        trailing_distance_percent: 1.5
     }
 };
 
@@ -338,6 +341,19 @@ const fetchStatus = dedupeAsync(async function _fetchStatus() {
             state.environment = data.environment;
             updateEnvironmentUI();
         }
+        if (!state._txEnvInitialized && (data.is_simulation !== undefined || data.environment)) {
+            state._txEnvInitialized = true;
+            const isSim = data.is_simulation !== undefined
+                ? Boolean(data.is_simulation)
+                : (data.environment === 'homologation' || data.environment === 'simulation');
+            currentTxEnv = isSim ? 'simulation' : 'production';
+            setTxFilterUI(isSim ? 'homologation' : 'production');
+            fetchCapitalTransactions(currentTxEnv);
+        }
+        if (data.stop_loss_percent !== undefined && Number.isFinite(Number(data.stop_loss_percent))) {
+            const rawSl = Number(data.stop_loss_percent);
+            state.stopLossPct = rawSl >= 0.5 ? rawSl / 100.0 : rawSl;
+        }
 
         renderKPIs(data);
         renderMarketStatus(data.market_status);
@@ -396,13 +412,20 @@ const fetchCapitalSummary = dedupeAsync(async function _fetchCapitalSummary() {
         };
         if (data.risk_params) {
             state.riskParams = data.risk_params;
+            const rawSl = Number(data.risk_params.stop_loss_percent);
+            if (Number.isFinite(rawSl) && rawSl > 0) {
+                state.stopLossPct = rawSl >= 0.5 ? rawSl / 100.0 : rawSl;
+            }
             syncRiskSlidersFromServer(data.risk_params);
         }
 
         updateEnvironmentUI();
         renderKPIs(state);
         renderCapitalTab();
-        renderActiveGoal();
+        const opEq = state.productionSummary
+            ? (state.productionSummary.operational_equity ?? state.productionSummary.ai_allocated_capital)
+            : undefined;
+        renderActiveGoal(state.activeGoal, opEq);
     } catch (err) {}
 });
 
@@ -615,7 +638,8 @@ function renderPositions() {
         const pnlPct = entry > 0 ? ((curr - entry) / entry) * 100 : 0;
         const pnlClass = pnl >= 0 ? 'positive' : 'negative';
 
-        const isTrailing = sl > 0 && sl > (entry * 0.95);
+        const initialSlRatio = 1 - (state.stopLossPct || 0.10) + 0.002;
+        const isTrailing = sl > 0 && entry > 0 && sl > (entry * initialSlRatio);
         const statusBadge = isTrailing
             ? '<span class="status-badge-inline trailing">🎯 TRAILING STOP</span>'
             : '<span class="status-badge-inline monitoring">🛡️ STOP LOSS</span>';
@@ -858,6 +882,26 @@ function renderCapitalTab() {
     if (aiEl) aiEl.textContent = formatBRL(aiCap);
     if (vaultEl) vaultEl.textContent = formatBRL(vaultCash);
 
+    const settledPix = (prod.settled_withdrawable_cash !== undefined && prod.settled_withdrawable_cash !== null)
+        ? Math.max(0, Number(prod.settled_withdrawable_cash))
+        : vaultCash;
+    const unsettledD2 = Math.max(0, Number(prod.unsettled_d2_cash ?? 0));
+    const nextD2Date = prod.next_d2_settlement_date || null;
+
+    const elSettledPix = document.getElementById('cap-settled-pix');
+    const elUnsettledD2 = document.getElementById('cap-unsettled-d2');
+    const elD2Date = document.getElementById('cap-d2-date');
+    if (elSettledPix) elSettledPix.textContent = formatBRL(settledPix);
+    if (elUnsettledD2) elUnsettledD2.textContent = formatBRL(unsettledD2);
+    if (elD2Date) {
+        if (nextD2Date && unsettledD2 > 0) {
+            const parts = String(nextD2Date).slice(0, 10).split('-');
+            elD2Date.textContent = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : String(nextD2Date);
+        } else {
+            elD2Date.textContent = 'Sem pendências';
+        }
+    }
+
     if (badgeAi) {
         if (aiCap <= 0) {
             badgeAi.className = 'status-badge-inline monitoring';
@@ -900,17 +944,17 @@ function updateWithdrawalPreview() {
     }
 }
 
-function renderActiveGoal() {
+function renderActiveGoal(goal = state.activeGoal, operationalEq = undefined) {
     const box = document.getElementById('active-goal-box');
     if (!box) return;
 
-    if (!state.activeGoal) {
+    if (!goal) {
         box.style.display = 'none';
         return;
     }
 
     box.style.display = 'flex';
-    const g = state.activeGoal;
+    const g = goal;
     const amtEl = document.getElementById('active-goal-amount');
     const tgtEl = document.getElementById('active-goal-target');
     const bar = document.getElementById('goal-progress-bar');
@@ -918,7 +962,11 @@ function renderActiveGoal() {
     if (amtEl) amtEl.textContent = formatBRL(g.amount);
     if (tgtEl) tgtEl.textContent = formatBRL(g.target_equity);
 
-    const curEq = Number(state.equity ?? 0);
+    const prod = state.productionSummary || {};
+    const resolvedOpEq = operationalEq !== undefined
+        ? Number(operationalEq)
+        : Number(prod.operational_equity ?? prod.ai_allocated_capital ?? 0);
+    const curEq = Number.isFinite(resolvedOpEq) ? resolvedOpEq : 0;
     const base = Number(g.base_equity ?? curEq);
     const tgt = Number(g.target_equity ?? (base + Number(g.amount ?? 0)));
     let pct = 0;
@@ -929,12 +977,13 @@ function renderActiveGoal() {
 }
 
 function setTxFilterUI(env) {
-    currentTxEnv = env;
+    const normalizedEnv = env === 'simulation' ? 'homologation' : env;
+    currentTxEnv = normalizedEnv;
     const btnTxProd = document.getElementById('btn-filter-tx-prod');
     const btnTxSim = document.getElementById('btn-filter-tx-sim');
     const badgeTxEnv = document.getElementById('badge-tx-env-label');
     if (btnTxProd && btnTxSim) {
-        if (env === 'production') {
+        if (normalizedEnv === 'production') {
             btnTxProd.className = 'btn-chip btn-chip-highlight';
             btnTxSim.className = 'btn-chip';
             if (badgeTxEnv) badgeTxEnv.textContent = 'MODO SELECIONADO: PRODUÇÃO (B3)';
@@ -1709,10 +1758,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     await Promise.all([
         fetchStatus(),
         fetchCapitalSummary(),
-        fetchCapitalTransactions(currentTxEnv),
         fetchNews(),
         fetchDecisions()
     ]);
+    if (!state._txEnvInitialized) {
+        fetchCapitalTransactions(currentTxEnv);
+    }
 
     startPollingLoop(fetchStatus, 2000);
     startPollingLoop(fetchCapitalSummary, 3000);
@@ -1722,7 +1773,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function fetchCapitalTransactions(targetEnv) {
     try {
-        const env = targetEnv || currentTxEnv || state.environment || 'production';
+        const rawEnv = targetEnv || currentTxEnv || state.environment || 'production';
+        const env = rawEnv === 'simulation' ? 'homologation' : rawEnv;
         const res = await fetch(`/api/capital/transactions?limit=50&environment=${encodeURIComponent(env)}`);
         if (!res.ok) return;
         const data = await res.json();

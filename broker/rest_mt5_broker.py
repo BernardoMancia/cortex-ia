@@ -3,7 +3,8 @@ Broker MetaTrader 5 do Projeto Córtex (Via Bridge REST).
 
 Implementa a interface BrokerBase comunicando-se de forma autenticada com a API REST
 do Bridge MT5. Suporta ordens multi-pernas B3, preenchimento dinâmico, reconciliação
-pós-timeout e modificação real de Stop-Loss.
+segura pós-timeout, cancelamento imediato de ordens pendentes (10008) e modificação
+real de Stop-Loss por perna.
 """
 
 from __future__ import annotations
@@ -20,12 +21,15 @@ from broker.base import BrokerBase, Order, OrderStatus, OrderType, Position
 from config.settings import settings
 from utils.helpers import (
     format_b3_ticker_for_quantity,
+    is_b3_unit_lot_asset,
     normalize_b3_ticker,
     split_b3_order_legs,
 )
 
 logger = logging.getLogger("cortex.broker.rest_mt5")
 BRT = ZoneInfo("America/Sao_Paulo")
+
+_SLOW_BRIDGE_ENDPOINTS = frozenset({"order_send", "order_check", "modify_sl", "connect"})
 
 
 class RestMT5Broker(BrokerBase):
@@ -58,17 +62,28 @@ class RestMT5Broker(BrokerBase):
         data: dict[str, Any] | None = None,
         method: str = "POST",
         raise_on_timeout: bool = False,
+        timeout: float | None = None,
     ) -> Any:
+        clean_ep = endpoint.lstrip("/").split("?", 1)[0]
+        effective_timeout = (
+            float(timeout)
+            if timeout is not None
+            else (25.0 if clean_ep in _SLOW_BRIDGE_ENDPOINTS else 10.0)
+        )
         url = f"{self._base_url}/{endpoint.lstrip('/')}"
         try:
             if method.upper() == "GET":
-                resp = self._session.get(url, headers=self._headers(), timeout=10)
+                resp = self._session.get(
+                    url,
+                    headers=self._headers(),
+                    timeout=effective_timeout,
+                )
             else:
                 resp = self._session.post(
                     url,
                     json=data if data is not None else {},
                     headers=self._headers(),
-                    timeout=10,
+                    timeout=effective_timeout,
                 )
             resp.raise_for_status()
             return resp.json()
@@ -94,6 +109,22 @@ class RestMT5Broker(BrokerBase):
             return 5
         pts = int(round((max(0.01, float(price)) * max_slip) / 0.01))
         return max(2, min(50, pts))
+
+    def _is_long_bot_position(self, p: dict[str, Any]) -> bool:
+        """Garante que apenas posições COMPRADAS (POSITION_TYPE_BUY == 0) deste robô sejam somadas."""
+        if not isinstance(p, dict) or p.get("magic") != self.MAGIC_NUMBER:
+            return False
+        pos_type = int(p.get("type", 0) or 0)
+        if pos_type != 0:
+            logger.critical(
+                "ALERTA CRÍTICO: posição SHORT (type=%d) detectada com MAGIC_NUMBER=%d em %s (ticket=%s) — ignorando na custódia comprada!",
+                pos_type,
+                self.MAGIC_NUMBER,
+                p.get("symbol"),
+                p.get("ticket"),
+            )
+            return False
+        return True
 
     def get_tick(self, ticker: str) -> dict[str, Any] | None:
         """Obtém cotação em tempo real (bid/ask/last/spread_pct) via Bridge."""
@@ -132,9 +163,10 @@ class RestMT5Broker(BrokerBase):
         """Detecta o type_filling suportado pelo símbolo via /symbol_info/{symbol}."""
         info = self._api_call(f"symbol_info/{symbol}", method="GET")
         if isinstance(info, dict):
+            trade_exemode = int(info.get("trade_exemode", -1) if info.get("trade_exemode") is not None else -1)
+            if trade_exemode == 2:
+                return 2  # ORDER_FILLING_RETURN (execução em bolsa B3)
             filling = int(info.get("filling_mode", 0) or 0)
-            if filling == 0 or (filling & 4):
-                return 2  # ORDER_FILLING_RETURN (padrão B3)
             if filling & 2:
                 return 1  # ORDER_FILLING_IOC
             if filling & 1:
@@ -142,7 +174,7 @@ class RestMT5Broker(BrokerBase):
         return 2  # ORDER_FILLING_RETURN
 
     def _get_raw_matching_positions(self, ticker: str) -> list[dict[str, Any]]:
-        """Busca posições brutas da Bridge filtradas por magic number e ticker-base."""
+        """Busca posições long brutas da Bridge filtradas por magic number e ticker-base."""
         norm = normalize_b3_ticker(ticker)
         if not norm:
             return []
@@ -152,35 +184,76 @@ class RestMT5Broker(BrokerBase):
         return [
             p
             for p in res
-            if isinstance(p, dict)
-            and p.get("magic") == self.MAGIC_NUMBER
+            if self._is_long_bot_position(p)
             and normalize_b3_ticker(str(p.get("symbol", ""))) == norm
         ]
 
-    def _get_open_symbol_qty(self, symbol: str) -> tuple[int, float]:
-        """Obtém quantidade aberta e preço médio atual de um símbolo específico."""
+    def _get_open_symbol_qty(self, symbol: str) -> tuple[int, float] | None:
+        """
+        Obtém quantidade comprada aberta e preço médio atual de um símbolo específico.
+        Retorna `None` se `/positions` falhar (evitando reconciliação fantasma).
+        """
         res = self._api_call("positions", method="GET")
         if not isinstance(res, list):
-            return 0, 0.0
+            return None
         qty = 0
         val = 0.0
         for p in res:
             if (
-                isinstance(p, dict)
-                and p.get("magic") == self.MAGIC_NUMBER
+                self._is_long_bot_position(p)
                 and str(p.get("symbol", "")).upper() == symbol.upper()
             ):
                 v = int(round(float(p.get("volume", 0) or 0)))
                 px = float(p.get("price_open", 0.0) or 0.0)
-                qty += v
-                val += v * px
+                if v > 0:
+                    qty += v
+                    val += v * px
         return qty, (round(val / qty, 2) if qty > 0 else 0.0)
 
+    def _cancel_resting_order(self, order_ticket: int, symbol: str = "") -> bool:
+        """Envia cancelamento best-effort (TRADE_ACTION_REMOVE = 8) para ordem pendente 10008."""
+        if not order_ticket or order_ticket <= 0:
+            return False
+        cancel_req: dict[str, Any] = {
+            "action": 8,
+            "order": int(order_ticket),
+            "symbol": symbol,
+            "magic": self.MAGIC_NUMBER,
+            "comment": "Cortex CANCEL_10008",
+        }
+        try:
+            res = self._api_call("order_send", cancel_req, method="POST")
+        except Exception as exc:
+            logger.warning(
+                "Exceção ao cancelar ordem pendente %d (%s): %s",
+                order_ticket,
+                symbol,
+                exc,
+            )
+            return False
+        ok = isinstance(res, dict) and int(res.get("retcode", -1)) in (10009, 10008)
+        if ok:
+            logger.info("Ordem pendente %d (%s) cancelada do livro B3.", order_ticket, symbol)
+        else:
+            logger.warning(
+                "Não foi possível confirmar cancelamento da ordem %d (%s): %s",
+                order_ticket,
+                symbol,
+                res,
+            )
+        return ok
+
     def connect(self) -> bool:
-        """Conecta ao Bridge MT5 sem trafegar senhas em texto plano."""
+        """Conecta ao Bridge MT5 validando autenticação e permissão de Algo Trading."""
         with self._lock:
             res = self._api_call("connect", {})
             if isinstance(res, dict) and res.get("status") == "connected":
+                if res.get("trade_allowed") is False:
+                    logger.error(
+                        "MT5 conectado, porém negociação automatizada (Algo Trading) está desabilitada!"
+                    )
+                    self._connected = False
+                    return False
                 self._connected = True
                 logger.info(
                     "Conectado ao MT5 Bridge. Saldo: R$%.2f",
@@ -193,21 +266,25 @@ class RestMT5Broker(BrokerBase):
     def disconnect(self) -> None:
         with self._lock:
             self._connected = False
-            self._session.close()
+            if self._session is not None:
+                try:
+                    self._session.close()
+                except Exception:
+                    pass
             self._session = requests.Session()
         logger.info("RestMT5Broker desconectado")
 
     def get_balance(self) -> float:
         res = self._api_call("account", method="GET")
-        if isinstance(res, dict):
-            return round(float(res.get("balance", 0.0) or 0.0), 2)
-        return 0.0
+        if not isinstance(res, dict):
+            raise ConnectionError("Falha de comunicação com MT5 Bridge")
+        return round(float(res.get("balance", 0.0) or 0.0), 2)
 
     def get_equity(self) -> float:
         res = self._api_call("account", method="GET")
-        if isinstance(res, dict):
-            return round(float(res.get("equity", 0.0) or 0.0), 2)
-        return 0.0
+        if not isinstance(res, dict):
+            raise ConnectionError("Falha de comunicação com MT5 Bridge")
+        return round(float(res.get("equity", 0.0) or 0.0), 2)
 
     def _execute_leg(
         self,
@@ -217,18 +294,28 @@ class RestMT5Broker(BrokerBase):
         order_type: OrderType,
         stop_loss: float = 0.0,
         position_ticket: int | None = None,
+        align_to_book: bool = True,
     ) -> tuple[OrderStatus, int, float, int | None, str]:
-        """Executa uma perna via Bridge com reconciliação automática em caso de timeout."""
+        """Executa uma perna via Bridge com reconciliação segura em caso de timeout."""
         rounded_price = round(float(price), 2)
         rounded_sl = round(float(stop_loss), 2) if stop_loss and stop_loss > 0 else 0.0
         filling_mode = self._detect_filling_mode(symbol)
+        max_spread = float(getattr(settings, "MAX_SPREAD_PERCENT", 0.008) or 0.0)
 
         if order_type == OrderType.BUY:
             tick = self._api_call(f"tick/{symbol}", method="GET")
             if isinstance(tick, dict):
+                has_bid_ask = ("bid" in tick and "ask" in tick)
                 bid = float(tick.get("bid", 0.0) or 0.0)
                 ask = float(tick.get("ask", 0.0) or 0.0)
-                max_spread = float(getattr(settings, "MAX_SPREAD_PERCENT", 0.008) or 0.0)
+                if bid > 0.0 and ask > 0.0 and ask < bid:
+                    msg = f"Livro em leilão (ask < bid) em {symbol}: bid=R${bid:.2f}, ask=R${ask:.2f}"
+                    logger.warning("Compra bloqueada — %s", msg)
+                    return OrderStatus.REJECTED, 0, rounded_price, None, msg
+                if has_bid_ask and (bid <= 0.0 or ask <= 0.0):
+                    msg = f"Livro sem liquidez (bid/ask zerado) em {symbol}: bid=R${bid:.2f}, ask=R${ask:.2f}"
+                    logger.warning("Compra bloqueada — %s", msg)
+                    return OrderStatus.REJECTED, 0, rounded_price, None, msg
                 if bid > 0.0 and ask > bid and max_spread > 0.0:
                     spread_pct = (ask - bid) / bid
                     if spread_pct > max_spread:
@@ -238,9 +325,17 @@ class RestMT5Broker(BrokerBase):
                         )
                         logger.warning("Compra bloqueada pelo Spread Guard — %s", msg)
                         return OrderStatus.REJECTED, 0, rounded_price, None, msg
-                if ask > 0.0 and rounded_price > 0.0:
+                if align_to_book and ask > 0.0 and rounded_price > 0.0:
                     if abs(ask - rounded_price) / rounded_price <= max(max_spread, 0.01):
                         rounded_price = round(ask, 2)
+        elif align_to_book:
+            tick = self._api_call(f"tick/{symbol}", method="GET")
+            if isinstance(tick, dict):
+                bid = float(tick.get("bid", 0.0) or 0.0)
+                ask = float(tick.get("ask", 0.0) or 0.0)
+                if bid > 0.0 and (ask <= 0.0 or ask >= bid) and rounded_price > 0.0:
+                    if abs(bid - rounded_price) / rounded_price <= max(max_spread, 0.01):
+                        rounded_price = round(bid, 2)
 
         deviation_pts = self._compute_deviation_points(rounded_price)
 
@@ -271,7 +366,7 @@ class RestMT5Broker(BrokerBase):
                 )
                 return OrderStatus.REJECTED, 0, rounded_price, None, str(comment)
 
-        before_qty, _ = self._get_open_symbol_qty(symbol)
+        before_res = self._get_open_symbol_qty(symbol)
 
         try:
             res = self._api_call("order_send", req, raise_on_timeout=True)
@@ -280,25 +375,28 @@ class RestMT5Broker(BrokerBase):
                 "Reconciliando posições em %s após timeout no envio da ordem...",
                 symbol,
             )
-            after_qty, open_px = self._get_open_symbol_qty(symbol)
-            if order_type == OrderType.BUY and after_qty > before_qty:
-                delta = after_qty - before_qty
-                return (
-                    OrderStatus.FILLED,
-                    delta,
-                    open_px or rounded_price,
-                    None,
-                    "Ordem reconciliada após timeout HTTP",
-                )
-            if order_type == OrderType.SELL and after_qty < before_qty:
-                delta = before_qty - after_qty
-                return (
-                    OrderStatus.FILLED,
-                    delta,
-                    rounded_price,
-                    None,
-                    "Venda reconciliada após timeout HTTP",
-                )
+            after_res = self._get_open_symbol_qty(symbol)
+            if before_res is not None and after_res is not None:
+                before_qty, _ = before_res
+                after_qty, open_px = after_res
+                if order_type == OrderType.BUY and after_qty > before_qty:
+                    delta = after_qty - before_qty
+                    return (
+                        OrderStatus.FILLED,
+                        delta,
+                        open_px or rounded_price,
+                        None,
+                        "Ordem reconciliada após timeout HTTP",
+                    )
+                if order_type == OrderType.SELL and after_qty < before_qty:
+                    delta = before_qty - after_qty
+                    return (
+                        OrderStatus.FILLED,
+                        delta,
+                        rounded_price,
+                        None,
+                        "Venda reconciliada após timeout HTTP",
+                    )
             return (
                 OrderStatus.REJECTED,
                 0,
@@ -323,30 +421,78 @@ class RestMT5Broker(BrokerBase):
         if ret == 10010:
             filled = int(round(float(res.get("volume", 0.0) or 0.0)))
             if filled > 0:
+                if filled < quantity and ticket is not None and ticket > 0:
+                    self._cancel_resting_order(ticket, symbol)
                 return OrderStatus.FILLED, filled, exec_price, ticket, f"Parcial: {comment}"
+            if ticket is not None and ticket > 0:
+                self._cancel_resting_order(ticket, symbol)
             return OrderStatus.REJECTED, 0, rounded_price, ticket, "Parcial com volume zero"
 
         if ret == 10008:
             deal = int(res.get("deal", 0) or 0)
             raw_vol = float(res.get("volume", 0.0) or 0.0)
             if deal > 0 and raw_vol > 0:
-                return OrderStatus.FILLED, int(round(raw_vol)), exec_price, ticket, comment
-            after_qty, open_px = self._get_open_symbol_qty(symbol)
-            if order_type == OrderType.BUY and after_qty > before_qty:
-                return (
-                    OrderStatus.FILLED,
-                    after_qty - before_qty,
-                    open_px or exec_price,
-                    ticket,
-                    comment,
+                filled_now = int(round(raw_vol))
+                if filled_now < quantity and ticket is not None and ticket > 0:
+                    self._cancel_resting_order(ticket, symbol)
+                return OrderStatus.FILLED, filled_now, exec_price, ticket, comment
+
+            after_res = self._get_open_symbol_qty(symbol)
+            if before_res is not None and after_res is not None:
+                before_qty, _ = before_res
+                after_qty, open_px = after_res
+                delta = (
+                    (after_qty - before_qty)
+                    if order_type == OrderType.BUY
+                    else (before_qty - after_qty)
                 )
-            if order_type == OrderType.SELL and after_qty < before_qty:
+                if delta >= quantity:
+                    return (
+                        OrderStatus.FILLED,
+                        delta,
+                        (open_px or exec_price) if order_type == OrderType.BUY else exec_price,
+                        ticket,
+                        comment,
+                    )
+                if delta > 0:
+                    if ticket is not None and ticket > 0:
+                        self._cancel_resting_order(ticket, symbol)
+                    return (
+                        OrderStatus.FILLED,
+                        delta,
+                        (open_px or exec_price) if order_type == OrderType.BUY else exec_price,
+                        ticket,
+                        comment,
+                    )
+
+            cancelled = False
+            if ticket is not None and ticket > 0:
+                cancelled = self._cancel_resting_order(ticket, symbol)
+                post_cancel_res = self._get_open_symbol_qty(symbol)
+                if before_res is not None and post_cancel_res is not None:
+                    before_qty, _ = before_res
+                    post_qty, post_px = post_cancel_res
+                    delta2 = (
+                        (post_qty - before_qty)
+                        if order_type == OrderType.BUY
+                        else (before_qty - post_qty)
+                    )
+                    if delta2 > 0:
+                        return (
+                            OrderStatus.FILLED,
+                            delta2,
+                            (post_px or exec_price) if order_type == OrderType.BUY else exec_price,
+                            ticket,
+                            comment,
+                        )
+
+            if cancelled:
                 return (
-                    OrderStatus.FILLED,
-                    before_qty - after_qty,
-                    exec_price,
+                    OrderStatus.REJECTED,
+                    0,
+                    rounded_price,
                     ticket,
-                    comment,
+                    f"Ordem pendente (10008) cancelada do livro B3: {comment}",
                 )
             return OrderStatus.PENDING, 0, rounded_price, ticket, f"Pendente: {comment}"
 
@@ -461,6 +607,7 @@ class RestMT5Broker(BrokerBase):
             )
 
         plan: list[tuple[str, int, int | None]] = []
+        std_lot_blocked = False
         raw_matching = self._get_raw_matching_positions(ticker)
         if raw_matching:
             remaining = int(quantity)
@@ -473,21 +620,42 @@ class RestMT5Broker(BrokerBase):
                 take = min(remaining, p_vol)
                 if take <= 0:
                     continue
-                if not p_sym.endswith("F") and take < 100 and take != p_vol:
-                    for sub_sym, sub_qty in split_b3_order_legs(ticker, take):
-                        plan.append((sub_sym, sub_qty, None))
+
+                is_std_lot = (not p_sym.endswith("F")) and (not is_b3_unit_lot_asset(p_sym))
+                if is_std_lot and take < p_vol and (take % 100 != 0):
+                    leg_take = (take // 100) * 100
+                    std_lot_blocked = True
+                    if leg_take <= 0:
+                        continue
+                    plan.append((p_sym, leg_take, p_tkt))
+                    remaining -= leg_take
                 elif p_sym.endswith("F") and take > 99:
                     rem_frac = take
                     while rem_frac > 0:
                         c = min(99, rem_frac)
                         plan.append((p_sym, c, p_tkt))
                         rem_frac -= c
+                    remaining -= take
                 else:
                     plan.append((p_sym, take, p_tkt))
-                remaining -= take
-            if remaining > 0:
-                for sub_sym, sub_qty in split_b3_order_legs(ticker, remaining):
-                    plan.append((sub_sym, sub_qty, None))
+                    remaining -= take
+
+            if not plan:
+                msg = (
+                    "Venda parcial fracionária incompatível com custódia em lote padrão B3 (múltiplo de 100 exigido)"
+                    if std_lot_blocked
+                    else f"Sem volume elegível para venda em {normalize_b3_ticker(ticker) or ticker}"
+                )
+                logger.warning("Venda rejeitada — %s", msg)
+                return Order(
+                    str(raw_matching[0].get("symbol", primary)),
+                    OrderType.SELL,
+                    quantity,
+                    rounded_price,
+                    status=OrderStatus.REJECTED,
+                    timestamp=now,
+                    comment=msg,
+                )
         else:
             for leg_sym, leg_qty in split_b3_order_legs(ticker, quantity):
                 plan.append((leg_sym, leg_qty, None))
@@ -497,6 +665,10 @@ class RestMT5Broker(BrokerBase):
         last_ticket: int | None = None
         any_pending = False
         comments: list[str] = []
+        if std_lot_blocked:
+            comments.append(
+                "Venda parcial fracionária incompatível com custódia em lote padrão B3 (múltiplo de 100 exigido)"
+            )
 
         for leg_sym, leg_qty, pos_tkt in plan:
             st, filled, px, tkt, msg = self._execute_leg(
@@ -505,6 +677,7 @@ class RestMT5Broker(BrokerBase):
                 price=rounded_price,
                 order_type=OrderType.SELL,
                 position_ticket=pos_tkt,
+                align_to_book=True,
             )
             if tkt is not None:
                 last_ticket = tkt
@@ -551,7 +724,7 @@ class RestMT5Broker(BrokerBase):
         )
 
     def emergency_sell(self, ticker: str) -> Order:
-        """Venda de emergência — liquida todas as posições abertas do ativo."""
+        """Venda de emergência — liquida todas as posições compradas abertas com margem comercializável."""
         now = datetime.now(tz=BRT)
         norm = normalize_b3_ticker(ticker) or ticker.strip().upper()
         raw_matching = self._get_raw_matching_positions(norm)
@@ -567,6 +740,7 @@ class RestMT5Broker(BrokerBase):
                 comment="Sem posição aberta",
             )
 
+        max_slip = float(getattr(settings, "MAX_SLIPPAGE_PERCENT", 0.003) or 0.003)
         total_filled = 0
         total_val = 0.0
         last_ticket: int | None = None
@@ -587,6 +761,8 @@ class RestMT5Broker(BrokerBase):
                 comments.append(f"Sem cotação para {sym}")
                 continue
 
+            sell_px = max(0.01, round(bid * (1.0 - max(0.0, max_slip)), 2))
+
             chunks = [qty]
             if sym.endswith("F") and qty > 99:
                 chunks = []
@@ -600,9 +776,10 @@ class RestMT5Broker(BrokerBase):
                 st, filled, px, ord_tkt, msg = self._execute_leg(
                     symbol=sym,
                     quantity=chunk_qty,
-                    price=bid,
+                    price=sell_px,
                     order_type=OrderType.SELL,
                     position_ticket=tkt,
+                    align_to_book=False,
                 )
                 if ord_tkt is not None:
                     last_ticket = ord_tkt
@@ -638,15 +815,14 @@ class RestMT5Broker(BrokerBase):
 
     def get_positions(self) -> list[Position]:
         res = self._api_call("positions", method="GET")
-        if not res:
-            return []
         if not isinstance(res, list):
-            logger.warning("get_positions: resposta inesperada do bridge: %s", type(res))
+            raise ConnectionError("Falha de comunicação com MT5 Bridge")
+        if not res:
             return []
 
         positions: list[Position] = []
         for p in res:
-            if not isinstance(p, dict) or p.get("magic") != self.MAGIC_NUMBER:
+            if not self._is_long_bot_position(p):
                 continue
 
             raw_time = p.get("time")
@@ -718,7 +894,6 @@ class RestMT5Broker(BrokerBase):
             logger.warning("modify_stop_loss: nenhuma posição aberta para %s", ticker)
             return False
 
-        rounded_sl = round(float(new_sl), 2)
         all_ok = True
         for p in raw_matching:
             ticket = int(p.get("ticket", 0) or 0)
@@ -727,10 +902,43 @@ class RestMT5Broker(BrokerBase):
                 all_ok = False
                 continue
 
+            sym_info = self._api_call(f"symbol_info/{symbol}", method="GET")
+            tick = self._api_call(f"tick/{symbol}", method="GET")
+            digits = (
+                int(sym_info.get("digits", 2) or 2)
+                if isinstance(sym_info, dict) and sym_info.get("digits") is not None
+                else 2
+            )
+            point = (
+                float(sym_info.get("point", 0.0) or 0.0)
+                if isinstance(sym_info, dict)
+                else 0.0
+            )
+            if point <= 0.0:
+                point = 10.0 ** (-digits) if digits > 0 else 0.01
+            stops_level = (
+                int(sym_info.get("stops_level", 0) or 0)
+                if isinstance(sym_info, dict)
+                else 0
+            )
+            leg_bid = (
+                float(tick.get("bid", 0.0) or 0.0)
+                if isinstance(tick, dict)
+                else 0.0
+            )
+            if leg_bid <= 0.0 and isinstance(sym_info, dict):
+                leg_bid = float(sym_info.get("bid", 0.0) or 0.0)
+
+            leg_sl = round(float(new_sl), digits)
+            if leg_bid > 0.0:
+                max_valid_sl = round(leg_bid - max(point, stops_level * point), digits)
+                if max_valid_sl > 0.0 and leg_sl > max_valid_sl:
+                    leg_sl = max_valid_sl
+
             payload = {
                 "position": ticket,
                 "symbol": symbol,
-                "sl": rounded_sl,
+                "sl": leg_sl,
                 "tp": float(p.get("tp", 0.0) or 0.0),
                 "magic": self.MAGIC_NUMBER,
             }
@@ -740,7 +948,7 @@ class RestMT5Broker(BrokerBase):
                     "Stop-loss atualizado via Bridge: %s (ticket=%d) → R$%.2f",
                     symbol,
                     ticket,
-                    rounded_sl,
+                    leg_sl,
                 )
             else:
                 logger.warning(

@@ -9,6 +9,7 @@ Implementa padrão singleton para garantir instância única.
 from __future__ import annotations
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Any, Final
@@ -33,9 +34,10 @@ def _env_bool(key: str, default: bool = False) -> bool:
 
 
 def _env_float(key: str, default: float = 0.0) -> float:
-    """Converte variável de ambiente para float."""
+    """Converte variável de ambiente para float finito."""
     try:
-        return float(os.getenv(key, str(default)))
+        res = float(os.getenv(key, str(default)))
+        return res if math.isfinite(res) else default
     except (ValueError, TypeError):
         return default
 
@@ -80,7 +82,7 @@ class Settings:
         self.VERBOSE: bool = bool(verbose) if verbose is not None else False
 
         self.PROJECT_ROOT: Final[Path] = _PROJECT_ROOT
-        self.VERSION: Final[str] = "2.9.0"
+        self.VERSION: Final[str] = "2.9.1"
 
         self.SIMULATION_MODE: bool = (
             simulation_mode if simulation_mode is not None
@@ -88,7 +90,8 @@ class Settings:
         )
         self.BROKER_MODE: str = os.getenv("BROKER_MODE", "simulator").strip().lower()
 
-        self.CAPITAL_INICIAL: float = _env_float("CAPITAL_INICIAL", 1000000.00)
+        raw_cap = _env_float("CAPITAL_INICIAL", 1000000.00)
+        self.CAPITAL_INICIAL: float = raw_cap if raw_cap > 0 else 1000000.00
         self.STOP_LOSS_PERCENT: float = _env_float("STOP_LOSS_PERCENT", 0.10)
         self.MAX_POSITIONS: int = _env_int("MAX_POSITIONS", 0)
         self.MAX_CONCENTRATION: float = _env_float("MAX_CONCENTRATION", 0.25)
@@ -341,20 +344,92 @@ class Settings:
             configs = db.get_all_configs()
 
             if "stop_loss_percent" in configs:
-                self.STOP_LOSS_PERCENT = float(configs["stop_loss_percent"])
+                try:
+                    val = float(configs["stop_loss_percent"])
+                    if not math.isfinite(val):
+                        raise ValueError("valor não finito")
+                    if not (0.01 <= val <= 0.50):
+                        logger.warning(
+                            "Configuração stop_loss_percent fora dos limites (%.4f) — ajustando para [0.01, 0.50]",
+                            val,
+                        )
+                    self.STOP_LOSS_PERCENT = max(0.01, min(0.50, val))
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Valor inválido para stop_loss_percent (%r): %s",
+                        configs["stop_loss_percent"], exc,
+                    )
+
             if "trailing_trigger_percent" in configs:
-                self.TRAILING_STOP_TRIGGER_PERCENT = float(configs["trailing_trigger_percent"])
+                try:
+                    val = float(configs["trailing_trigger_percent"])
+                    if not math.isfinite(val):
+                        raise ValueError("valor não finito")
+                    if not (0.005 <= val <= 0.30):
+                        logger.warning(
+                            "Configuração trailing_trigger_percent fora dos limites (%.4f) — ajustando para [0.005, 0.30]",
+                            val,
+                        )
+                    self.TRAILING_STOP_TRIGGER_PERCENT = max(0.005, min(0.30, val))
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Valor inválido para trailing_trigger_percent (%r): %s",
+                        configs["trailing_trigger_percent"], exc,
+                    )
+
             if "trailing_distance_percent" in configs:
-                self.TRAILING_STOP_DISTANCE_PERCENT = float(configs["trailing_distance_percent"])
-            if "sim_initial_capital" in configs:
-                self.CAPITAL_INICIAL = float(configs["sim_initial_capital"])
-            elif "simulation_initial_capital" in configs:
-                self.CAPITAL_INICIAL = float(configs["simulation_initial_capital"])
+                try:
+                    val = float(configs["trailing_distance_percent"])
+                    if not math.isfinite(val):
+                        raise ValueError("valor não finito")
+                    if not (0.005 <= val <= 0.20):
+                        logger.warning(
+                            "Configuração trailing_distance_percent fora dos limites (%.4f) — ajustando para [0.005, 0.20]",
+                            val,
+                        )
+                    self.TRAILING_STOP_DISTANCE_PERCENT = max(0.005, min(0.20, val))
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Valor inválido para trailing_distance_percent (%r): %s",
+                        configs["trailing_distance_percent"], exc,
+                    )
+
+            if self.TRAILING_STOP_DISTANCE_PERCENT >= self.TRAILING_STOP_TRIGGER_PERCENT:
+                fallback_dist = (
+                    round(max(0.001, self.TRAILING_STOP_TRIGGER_PERCENT * 0.8), 4)
+                    if self.TRAILING_STOP_TRIGGER_PERCENT <= 0.005
+                    else round(max(0.005, self.TRAILING_STOP_TRIGGER_PERCENT * 0.8), 4)
+                )
+                logger.warning(
+                    "trailing_distance_percent (%.4f) >= trailing_trigger_percent (%.4f) — ajustando distância para %.4f",
+                    self.TRAILING_STOP_DISTANCE_PERCENT,
+                    self.TRAILING_STOP_TRIGGER_PERCENT,
+                    fallback_dist,
+                )
+                self.TRAILING_STOP_DISTANCE_PERCENT = fallback_dist
+
+            cap_key = (
+                "sim_initial_capital"
+                if "sim_initial_capital" in configs
+                else ("simulation_initial_capital" if "simulation_initial_capital" in configs else None)
+            )
+            if cap_key is not None:
+                try:
+                    cap_val = float(configs[cap_key])
+                    if not math.isfinite(cap_val) or cap_val <= 0:
+                        raise ValueError("capital inicial deve ser finito e > 0")
+                    self.CAPITAL_INICIAL = cap_val
+                except (ValueError, TypeError) as exc:
+                    logger.warning(
+                        "Valor inválido para %s (%r): %s",
+                        cap_key, configs[cap_key], exc,
+                    )
+
             if reload_environment and "environment" in configs:
-                self.SIMULATION_MODE = (configs["environment"].strip().lower() == "homologation")
+                self.SIMULATION_MODE = (str(configs["environment"]).strip().lower() == "homologation")
                 self.BROKER_MODE = "simulator" if self.SIMULATION_MODE else "mt5"
         except Exception as exc:
-            logger.debug("Falha ao recarregar configuração dinâmica: %s", exc)
+            logger.warning("Falha ao recarregar configuração dinâmica: %s", exc)
 
     def get_dynamic_config(self) -> dict[str, Any]:
         self.reload_dynamic_config()

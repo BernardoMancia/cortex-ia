@@ -18,6 +18,22 @@ import uuid
 
 logger = logging.getLogger("mt5_bridge.mql5_rpc")
 
+_NON_INTRADAY_TIMEFRAMES = frozenset(
+    {
+        "D1",
+        "1D",
+        "16408",
+        "W1",
+        "1W",
+        "1WK",
+        "32769",
+        "MN1",
+        "MN",
+        "1MO",
+        "49153",
+    }
+)
+
 
 class _AttrDict:
     """Wrapper leve que expõe chaves como atributos e implementa `_asdict()`."""
@@ -69,7 +85,7 @@ class MQL5FileRPCBackend:
 
     def __init__(self, rpc_dir: str | Path, default_timeout: float = 10.0) -> None:
         self._rpc_dir = Path(rpc_dir)
-        self._default_timeout = max(1.0, float(default_timeout))
+        self._default_timeout = max(0.5, float(default_timeout))
         self._last_error: tuple[int, str] = (1, "Success")
         self._last_gc_ts: float = 0.0
         self._rpc_dir.mkdir(parents=True, exist_ok=True)
@@ -116,13 +132,22 @@ class MQL5FileRPCBackend:
 
     def _read_fresh_heartbeat(self, max_age_sec: float = 15.0) -> dict[str, Any] | None:
         hb_path = self._rpc_dir / "heartbeat.json"
-        try:
-            st = hb_path.stat()
-        except OSError:
-            return None
-        if (time.time() - st.st_mtime) > max_age_sec:
-            return None
-        return self._read_json_file(hb_path)
+        for attempt in range(3):
+            try:
+                st = hb_path.stat()
+            except OSError:
+                if attempt + 1 < 3:
+                    time.sleep(0.008)
+                    continue
+                return None
+            if (time.time() - st.st_mtime) > max_age_sec:
+                return None
+            parsed = self._read_json_file(hb_path, retries=2)
+            if parsed is not None:
+                return parsed
+            if attempt + 1 < 3:
+                time.sleep(0.008)
+        return None
 
     def _rpc(self, params: dict[str, Any], timeout: float | None = None) -> dict[str, Any] | None:
         self._rpc_dir.mkdir(parents=True, exist_ok=True)
@@ -214,14 +239,17 @@ class MQL5FileRPCBackend:
                 "terminal_trade_allowed": bool(hb.get("terminal_trade_allowed", False)),
                 "expert_trade_allowed": bool(hb.get("expert_trade_allowed", False)),
                 "server": str(hb.get("server", "")),
+                "tz_offset_sec": int(hb.get("tz_offset_sec", 0) or 0),
             }
         )
 
     def account_info(self) -> _AttrDict | None:
-        hb = self._read_fresh_heartbeat(max_age_sec=5.0)
+        hb = self._read_fresh_heartbeat(max_age_sec=1.5)
         if hb is None:
             hb = self._rpc({"cmd": "account"}, timeout=2.5)
         if hb is None or not bool(hb.get("connected", False)):
+            if hb is not None:
+                self._set_error(-10004, "Terminal running, waiting broker login")
             return None
         self._set_error(1, "Success")
         return _AttrDict(
@@ -235,6 +263,7 @@ class MQL5FileRPCBackend:
                 "margin_free": float(hb.get("margin_free", 0.0) or 0.0),
                 "trade_allowed": bool(hb.get("account_trade_allowed", True)),
                 "trade_expert": bool(hb.get("account_expert_allowed", True)),
+                "tz_offset_sec": int(hb.get("tz_offset_sec", 0) or 0),
             }
         )
 
@@ -254,27 +283,53 @@ class MQL5FileRPCBackend:
         resp = self._rpc({"cmd": "tick", "symbol": symbol.strip().upper()}, timeout=6.0)
         if resp is None or not isinstance(resp.get("data"), dict):
             return None
-        return _AttrDict(resp["data"])
+        data = dict(resp["data"])
+        tz_offset = int(resp.get("tz_offset_sec", data.get("tz_offset_sec", 0)) or 0)
+        if tz_offset != 0:
+            raw_time = int(data.get("time", 0) or 0)
+            if raw_time > 0:
+                data["time"] = raw_time - tz_offset
+            raw_msc = int(data.get("time_msc", 0) or 0)
+            if raw_msc > 0:
+                data["time_msc"] = raw_msc - (tz_offset * 1000)
+        data["tz_offset_sec"] = tz_offset
+        return _AttrDict(data)
 
     def copy_rates_from_pos(
         self,
         symbol: str,
         timeframe: int | str,
-        _start_pos: int,
-        count: int,
+        start_pos: int = 0,
+        count: int = 120,
     ) -> list[dict[str, Any]] | None:
+        safe_start = max(0, int(start_pos))
+        tf_str = str(timeframe).strip()
         resp = self._rpc(
             {
                 "cmd": "rates",
                 "symbol": symbol.strip().upper(),
-                "timeframe": str(timeframe),
+                "timeframe": tf_str,
+                "start_pos": safe_start,
                 "count": int(count),
             },
             timeout=10.0,
         )
         if resp is None or not isinstance(resp.get("rates"), list):
             return None
-        return resp["rates"]
+
+        tz_offset = int(resp.get("tz_offset_sec", 0) or 0)
+        is_intraday = tf_str.upper() not in _NON_INTRADAY_TIMEFRAMES
+        out: list[dict[str, Any]] = []
+        for row in resp["rates"]:
+            if not isinstance(row, dict):
+                continue
+            bar = dict(row)
+            if is_intraday and tz_offset != 0:
+                raw_time = int(bar.get("time", 0) or 0)
+                if raw_time > 0:
+                    bar["time"] = raw_time - tz_offset
+            out.append(bar)
+        return out
 
     def positions_get(
         self,
@@ -289,7 +344,21 @@ class MQL5FileRPCBackend:
         resp = self._rpc(params, timeout=6.0)
         if resp is None or not isinstance(resp.get("positions"), list):
             return None
-        return [_AttrDict(item) for item in resp["positions"] if isinstance(item, dict)]
+
+        tz_offset = int(resp.get("tz_offset_sec", 0) or 0)
+        out: list[_AttrDict] = []
+        for item in resp["positions"]:
+            if not isinstance(item, dict):
+                continue
+            pos_dict = dict(item)
+            item_tz = int(pos_dict.get("tz_offset_sec", tz_offset) or 0)
+            if item_tz != 0:
+                raw_time = int(pos_dict.get("time", 0) or 0)
+                if raw_time > 0:
+                    pos_dict["time"] = raw_time - item_tz
+            pos_dict["tz_offset_sec"] = item_tz
+            out.append(_AttrDict(pos_dict))
+        return out
 
     def order_check(self, request: dict[str, Any]) -> _AttrDict | None:
         params: dict[str, Any] = {"cmd": "order_check"}

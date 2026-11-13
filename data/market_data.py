@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 
 from config.settings import settings
 from utils.helpers import (
@@ -187,9 +188,19 @@ class MarketData:
         self._previous_prices: dict[str, float] = {}
         self._quote_info: dict[str, dict[str, Any]] = {}
         self._legacy_lock: threading.Lock = threading.Lock()
-        self._bridge_session: requests.Session = requests.Session()
+        self._bridge_local = threading.local()
+        self._bridge_sessions_lock: threading.Lock = threading.Lock()
+        self._bridge_sessions: list[requests.Session] = []
+        self._primary_bridge_session: Optional[requests.Session] = None
         self._bridge_backoff_until: float = 0.0
         self._regime_cache: tuple[dict[str, Any], float] | None = None
+        self._executor_lock: threading.Lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=_MAX_YF_WORKERS,
+            thread_name_prefix="cortex-yf",
+        )
+        # Inicializa a sessão Bridge da thread principal
+        self._primary_bridge_session = self._get_bridge_session()
 
         try:
             import yfinance  # noqa: F401
@@ -214,6 +225,76 @@ class MarketData:
             self._yf_available,
             self._mt5_available,
         )
+
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """Retorna o ThreadPoolExecutor persistente para buscas concorrentes, recriando após close()."""
+        with self._executor_lock:
+            if self._executor is None or getattr(self._executor, "_shutdown", False):
+                self._executor = ThreadPoolExecutor(
+                    max_workers=_MAX_YF_WORKERS,
+                    thread_name_prefix="cortex-yf",
+                )
+            return self._executor
+
+    def _create_bridge_session(self) -> requests.Session:
+        sess = requests.Session()
+        adapter = HTTPAdapter(pool_connections=4, pool_maxsize=8)
+        sess.mount("http://", adapter)
+        sess.mount("https://", adapter)
+        with self._bridge_sessions_lock:
+            self._bridge_sessions.append(sess)
+        return sess
+
+    def _get_bridge_session(self) -> requests.Session:
+        """Retorna `requests.Session` isolado por thread para o MT5 Bridge."""
+        primary = self._primary_bridge_session
+        if primary is not None and "get" in getattr(primary, "__dict__", {}):
+            return primary
+        sess = getattr(self._bridge_local, "session", None)
+        if sess is None:
+            sess = self._create_bridge_session()
+            self._bridge_local.session = sess
+        return sess
+
+    @property
+    def _bridge_session(self) -> requests.Session:
+        return self._get_bridge_session()
+
+    @_bridge_session.setter
+    def _bridge_session(self, session: requests.Session) -> None:
+        self._bridge_local.session = session
+        self._primary_bridge_session = session
+        with self._bridge_sessions_lock:
+            if session not in self._bridge_sessions:
+                self._bridge_sessions.append(session)
+
+    def close(self) -> None:
+        """Encerra o pool persistente de threads e fecha todas as sessões HTTP do MT5 Bridge."""
+        with self._executor_lock:
+            executor = self._executor
+            self._executor = None
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception as exc:
+                logger.debug("Erro ao encerrar executor do MarketData: %s", exc)
+
+        with self._bridge_sessions_lock:
+            sessions = list(self._bridge_sessions)
+            self._bridge_sessions.clear()
+        self._primary_bridge_session = None
+        for sess in sessions:
+            try:
+                sess.close()
+            except Exception as exc:
+                logger.debug("Erro ao fechar sessão HTTP do Bridge: %s", exc)
+        self._bridge_local = threading.local()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _record_quote_metadata(
         self,
@@ -407,19 +488,22 @@ class MarketData:
             "5m": ("M5", 120, 25),
             "15m": ("M15", 120, 25),
             "30m": ("M30", 120, 25),
-            "60m": ("H1", 120, 30),
-            "1h": ("H1", 120, 30),
+            "60m": ("H1", 140, 52),
+            "1h": ("H1", 140, 52),
             "1d": (
                 "D1",
                 520 if norm_period == "2y"
                 else 260 if norm_period == "1y"
                 else 140 if norm_period == "6mo"
                 else 95 if norm_period == "3mo"
-                else 35 if norm_period == "1mo"
+                else 75 if norm_period == "2mo"
+                else 65 if norm_period == "1mo"
                 else 10 if norm_period == "5d"
                 else 120,
                 3 if norm_period == "5d" else 25 if norm_period == "1mo" else 55,
             ),
+            "1wk": ("W1", 104, 20),
+            "1mo": ("MN1", 60, 12),
         }
         if norm_interval not in tf_map:
             return None
@@ -455,7 +539,14 @@ class MarketData:
                     if "volume" in df.columns
                     else df.get("real_volume", df.get("tick_volume", 0))
                 )
-                idx = pd.to_datetime(df["time"].astype("int64"), unit="s", utc=True).dt.tz_convert(BRT)
+                if mt5_tf in ("D1", "W1", "MN1"):
+                    idx = (
+                        pd.to_datetime(df["time"].astype("int64"), unit="s", utc=True)
+                        .dt.tz_localize(None)
+                        .dt.tz_localize(BRT)
+                    )
+                else:
+                    idx = pd.to_datetime(df["time"].astype("int64"), unit="s", utc=True).dt.tz_convert(BRT)
                 out_df = pd.DataFrame(
                     {
                         "Open": df["open"].astype(float).to_numpy(),
@@ -575,13 +666,12 @@ class MarketData:
                 logger.debug("Falha ao obter preço para %s no lote: %s", t, exc)
                 return t, None
 
-        max_workers = max(1, min(len(missing_tickers), _MAX_YF_WORKERS))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_ticker = {executor.submit(_fetch_single, t): t for t in missing_tickers}
-            for future in as_completed(future_to_ticker):
-                t, price_data = future.result()
-                if price_data is not None:
-                    results[t] = price_data
+        executor = self._get_executor()
+        future_to_ticker = {executor.submit(_fetch_single, t): t for t in missing_tickers}
+        for future in as_completed(future_to_ticker):
+            t, price_data = future.result()
+            if price_data is not None:
+                results[t] = price_data
 
         return results
 
@@ -622,13 +712,12 @@ class MarketData:
                 logger.warning("Falha ao obter OHLCV para %s no lote: %s", base_t, exc)
                 return base_t, pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
-        max_workers = max(1, min(len(missing_bases), _MAX_YF_WORKERS))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_base = {executor.submit(_fetch_df, b): b for b in missing_bases}
-            for future in as_completed(future_to_base):
-                base_t, df = future.result()
-                for raw_t in base_to_raw.get(base_t, [base_t]):
-                    results[raw_t] = df.copy()
+        executor = self._get_executor()
+        future_to_base = {executor.submit(_fetch_df, b): b for b in missing_bases}
+        for future in as_completed(future_to_base):
+            base_t, df = future.result()
+            for raw_t in base_to_raw.get(base_t, [base_t]):
+                results[raw_t] = df.copy()
 
         return results
 
@@ -962,19 +1051,20 @@ class MarketData:
                     "error": str(exc),
                 }
 
-        max_workers = max(1, min(_MAX_YF_WORKERS, len(tickers)))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_fetch_one, t): t for t in tickers}
-            for future in as_completed(futures):
-                raw_ticker, data = future.result()
-                results[raw_ticker] = data
+        executor = self._get_executor()
+        futures = {executor.submit(_fetch_one, t): t for t in tickers}
+        for future in as_completed(futures):
+            raw_ticker, data = future.result()
+            results[raw_ticker] = data
 
         return results
 
     def clear_cache(self) -> None:
-        """Limpa os caches de preços e OHLCV."""
+        """Limpa os caches de preços, OHLCV e regime de mercado."""
         self._cache.clear()
         self._ohlcv_cache.clear()
+        with self._legacy_lock:
+            self._regime_cache = None
         logger.debug("Caches de preços e OHLCV limpos")
 
     def _update_legacy_cache(self, ticker: str, price: float) -> None:
@@ -1040,8 +1130,10 @@ class MarketData:
         `settings.MARKET_REGIME_MAX_DROP_PCT` (padrão `-1.5%`).
         """
         now_mono = time.monotonic()
-        if self._regime_cache is not None:
-            cached_data, cached_ts = self._regime_cache
+        with self._legacy_lock:
+            cached_regime = self._regime_cache
+        if cached_regime is not None:
+            cached_data, cached_ts = cached_regime
             if (now_mono - cached_ts) < 60.0 and cached_data.get("benchmark") == benchmark:
                 return dict(cached_data)
 
@@ -1077,7 +1169,8 @@ class MarketData:
                 "change_pct": round(change_pct, 2),
                 "is_bearish_crash": bool(change_pct <= max_drop),
             }
-            self._regime_cache = (res, now_mono)
+            with self._legacy_lock:
+                self._regime_cache = (res, now_mono)
             return dict(res)
         except Exception as exc:
             logger.debug("Regime de mercado indisponível para %s: %s", benchmark, exc)

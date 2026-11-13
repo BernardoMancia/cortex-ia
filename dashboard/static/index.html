@@ -344,6 +344,20 @@
                                 </div>
                                 <div class="cap-status-value highlight-vault" id="cap-manage-vault">R$ 0,00</div>
                                 <div class="cap-status-desc">Saldo protegido que a IA não pode tocar sob nenhuma condição</div>
+                                <div class="cap-d2-breakdown" style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(148, 163, 184, 0.14); font-size: 0.78rem; display: flex; flex-direction: column; gap: 4px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="text-muted">💸 Sacável via PIX hoje:</span>
+                                        <strong id="cap-settled-pix" class="positive">R$ 0,00</strong>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="text-muted">⏳ Em liquidação B3 (D+2):</span>
+                                        <strong id="cap-unsettled-d2">R$ 0,00</strong>
+                                    </div>
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <span class="text-muted">📅 Próxima liquidação:</span>
+                                        <span id="cap-d2-date" class="text-muted">Sem pendências</span>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -669,7 +683,7 @@
 
         <footer class="app-footer">
             <div class="footer-left">
-                <span>Córtex IA v2.9.0 — Sistema Quantitativo B3</span>
+                <span>Córtex IA v2.9.1 — Sistema Quantitativo B3</span>
             </div>
             <div class="footer-right">
                 <span id="footer-status-pill">🟢 Sistema Operacional</span>

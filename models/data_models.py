@@ -53,6 +53,8 @@ class Position:
         self.entry_price = entry_price
         self.stop_loss = stop_loss
         resolved_dt = timestamp if timestamp is not None else (entry_time if entry_time is not None else datetime.now(BRT))
+        if isinstance(resolved_dt, datetime) and resolved_dt.tzinfo is None:
+            resolved_dt = resolved_dt.replace(tzinfo=BRT)
         self.entry_time = resolved_dt
         self.current_price = current_price if (current_price > 0 or entry_price <= 0) else entry_price
         self.ticket = ticket
@@ -66,6 +68,8 @@ class Position:
     @timestamp.setter
     def timestamp(self, value: datetime | None) -> None:
         if value is not None:
+            if isinstance(value, datetime) and value.tzinfo is None:
+                value = value.replace(tzinfo=BRT)
             self.entry_time = value
 
     @property
@@ -207,7 +211,8 @@ class HealthReport:
     disk_threshold: float = field(default=95.0, repr=False)
 
     def __post_init__(self) -> None:
-        """Calcula se o sistema está saudável preservando falhas explícitas."""
+        """Calcula se o sistema está saudável preservando falhas explícitas sem mutar lista externa."""
+        self.alerts = list(self.alerts) if self.alerts else []
         thresholds_ok = (
             self.cpu_percent < self.cpu_threshold
             and self.ram_percent < self.ram_threshold

@@ -173,13 +173,19 @@ class DecisionEngine:
         ohlcv_df: Any = None,
         scheduler: Any = None,
         market_regime: Optional[dict[str, Any]] = None,
+        reference_time: Optional[datetime] = None,
     ) -> Decision:
         """
         Avalia um ativo e gera decisão de trading completa.
         """
         base_ticker = normalize_b3_ticker(ticker) or ticker.strip().upper()
         logger.debug("Avaliando %s com %d notícias", base_ticker, len(news_items or []))
-        now = datetime.now(BRT)
+        now_brt = (
+            reference_time.astimezone(BRT)
+            if (reference_time and reference_time.tzinfo)
+            else (reference_time.replace(tzinfo=BRT) if reference_time else datetime.now(BRT))
+        )
+        now = now_brt
 
         current_price: Optional[float] = None
         price_data: Optional[dict[str, Any]] = None
@@ -370,7 +376,7 @@ class DecisionEngine:
                         from core.scheduler import MarketScheduler
                         sched_obj = MarketScheduler()
                     in_opening_cooldown = bool(
-                        sched_obj.is_opening_stabilization(dt=now, minutes=cooldown_min) is True
+                        sched_obj.is_opening_stabilization(dt=now_brt, minutes=cooldown_min) is True
                     )
 
                 # 2. Filtro de Regime Sistêmico da B3 (queda aguda de BOVA11)
@@ -394,26 +400,35 @@ class DecisionEngine:
                 mtf_blocked = False
                 mtf_detail = ""
                 if (
-                    not in_opening_cooldown
+                    reference_time is None
+                    and not in_opening_cooldown
                     and not is_bearish_regime
                     and bool(getattr(settings, "ENABLE_MTF_CONFIRMATION", False))
                 ):
                     try:
                         df_60m = self.market_data.get_ohlcv(
-                            ticker=base_ticker, period="1mo", interval="60m"
+                            ticker=base_ticker, period="2mo", interval="60m"
                         )
-                        if isinstance(df_60m, pd.DataFrame) and len(df_60m) >= 35:
-                            h1_tech = self.technical.analyze(base_ticker, df_60m)
-                            if h1_tech.signal in (TrendSignal.SELL, TrendSignal.STRONG_SELL):
-                                mtf_blocked = True
-                                mtf_detail = (
-                                    f"gráfico intradiário de 60m em reversão baixista ({h1_tech.signal.value})"
-                                )
-                            elif self._is_real_number(h1_tech.rsi) and float(h1_tech.rsi) >= 76.0:
-                                mtf_blocked = True
-                                mtf_detail = (
-                                    f"gráfico intradiário de 60m sobrecomprado (RSI={float(h1_tech.rsi):.1f})"
-                                )
+                        if df_60m is not None:
+                            raw_min_fn = getattr(self.technical, "_min_required_bars", None)
+                            cand_min = raw_min_fn() if callable(raw_min_fn) else None
+                            min_req = (
+                                cand_min
+                                if (isinstance(cand_min, int) and not isinstance(cand_min, bool))
+                                else 35
+                            )
+                            if isinstance(df_60m, pd.DataFrame) and len(df_60m) >= min_req:
+                                h1_tech = self.technical.analyze(base_ticker, df_60m)
+                                if h1_tech.signal in (TrendSignal.SELL, TrendSignal.STRONG_SELL):
+                                    mtf_blocked = True
+                                    mtf_detail = (
+                                        f"gráfico intradiário de 60m em reversão baixista ({h1_tech.signal.value})"
+                                    )
+                                elif self._is_real_number(h1_tech.rsi) and float(h1_tech.rsi) >= 76.0:
+                                    mtf_blocked = True
+                                    mtf_detail = (
+                                        f"gráfico intradiário de 60m sobrecomprado (RSI={float(h1_tech.rsi):.1f})"
+                                    )
                     except Exception as mtf_err:
                         logger.debug("Confirmação MTF 60m indisponível para %s: %s", base_ticker, mtf_err)
 
@@ -486,27 +501,36 @@ class DecisionEngine:
                 tech_result.signal in (TrendSignal.STRONG_SELL, TrendSignal.SELL)
                 or sent_result.score < -0.3
             ):
-                # Escudo Tributário PF Anti-Day-Trade (preserva isenção Swing-Trade de R$ 20 mil/mês)
-                same_day_profit_hold = False
-                if bool(getattr(settings, "AVOID_DAY_TRADE_TAX", False)) and position is not None:
+                # Escudo Tributário PF Anti-Day-Trade (preserva isenção Swing-Trade de R$ 20 mil/mês
+                # e evita prejuízo Day-Trade incomunicável com Swing-Trade)
+                avoid_dt = bool(getattr(settings, "AVOID_DAY_TRADE_TAX", False))
+                today_brt = now_brt.date()
+                is_same_day = False
+                entry_px = 0.0
+                if avoid_dt and position is not None:
                     entry_dt = getattr(position, "entry_time", None) or getattr(position, "timestamp", None)
                     entry_px = float(getattr(position, "entry_price", 0.0) or 0.0)
-                    if isinstance(entry_dt, datetime) and entry_px > 0 and current_price > entry_px:
+                    if isinstance(entry_dt, datetime):
                         opened_date = entry_dt.astimezone(BRT).date() if entry_dt.tzinfo else entry_dt.date()
-                        if opened_date == now.date():
-                            same_day_profit_hold = True
+                        is_same_day = opened_date == today_brt
 
-                if same_day_profit_hold:
+                if avoid_dt and is_same_day:
                     action = Action.HOLD
                     target_quantity = existing_qty
                     stop_loss = float(existing_stop or 0.0)
+                    pnl_status = (
+                        "com lucro"
+                        if (entry_px > 0 and current_price > entry_px)
+                        else "em oscilação intradiária"
+                    )
                     block_reason_note = (
-                        "Proteção Tributária PF (Anti-Day-Trade): posição aberta hoje com lucro; "
-                        "venda discricionária retida até D+1 para preservar a isenção mensal de "
-                        "R$ 20.000,00 em Swing-Trade (Stop-Loss permanece 100% ativo)."
+                        f"Proteção Tributária PF (Anti-Day-Trade): posição aberta hoje ({pnl_status}); "
+                        "venda discricionária retida até D+1 para preservar o regime Swing-Trade "
+                        "(isenção mensal de R$ 20.000,00 e compensação tributária unificada; "
+                        "Stop-Loss emergencial permanece 100% ativo)."
                     )
                     logger.info(
-                        "🛡️ Anti-Day-Trade ativo para %s: mantendo lucro aberto hoje até D+1.",
+                        "🛡️ Anti-Day-Trade ativo para %s: retendo saída discricionária aberta hoje até D+1.",
                         base_ticker,
                     )
                 else:
@@ -560,6 +584,7 @@ class DecisionEngine:
         self,
         watchlist: list[str],
         news_items: list[NewsItem],
+        reference_time: Optional[datetime] = None,
     ) -> list[Decision]:
         """
         Avalia todos os ativos da watchlist priorizando posições abertas (stop-loss/saídas).
@@ -579,11 +604,11 @@ class DecisionEngine:
 
         for ticker in held_tickers:
             ticker_news = self._filter_news_for_ticker(ticker, news_items)
-            decisions.append(self.evaluate(ticker, ticker_news))
+            decisions.append(self.evaluate(ticker, ticker_news, reference_time=reference_time))
 
         for ticker in free_tickers:
             ticker_news = self._filter_news_for_ticker(ticker, news_items)
-            decisions.append(self.evaluate(ticker, ticker_news))
+            decisions.append(self.evaluate(ticker, ticker_news, reference_time=reference_time))
 
         actionable = [d for d in decisions if d.action != Action.HOLD]
         logger.info(

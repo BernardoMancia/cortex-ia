@@ -7,11 +7,16 @@ cálculos financeiros, normalização e roteamento de lotes da B3.
 
 from __future__ import annotations
 
-from datetime import datetime
+import math
+import re
+from datetime import datetime, timezone
 from typing import Final
 from zoneinfo import ZoneInfo
 
 BRT: Final[ZoneInfo] = ZoneInfo("America/Sao_Paulo")
+_SQLITE_UTC_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$"
+)
 
 # ETFs e FIIs negociados em lote unitário (1 cota) na B3 sem sufixo 'F'.
 # Units de ações (ex.: BPAC11, TAEE11, SANB11, KLBN11, IGTI11, SAPR11, ALUP11)
@@ -27,7 +32,9 @@ B3_ETF_FII_TICKERS: Final[frozenset[str]] = frozenset({
 
 B3_EQUITY_UNITS: Final[frozenset[str]] = frozenset({
     "BPAC11", "SANB11", "TAEE11", "KLBN11", "IGTI11", "SAPR11",
-    "ALUP11", "ENGI11", "BIOM11", "MODL11", "RNEW11", " DASA11".strip(),
+    "ALUP11", "ENGI11", "BIOM11", "MODL11", "RNEW11", "DASA11",
+    "AURE11", "GETT11", "SYNE11", "PPLA11", "PINE11", "BLUT11",
+    "AESB11",
 })
 
 
@@ -129,7 +136,7 @@ def split_b3_order_legs(ticker: str, quantity: int) -> list[tuple[str, int]]:
     return legs
 
 
-def format_brl(value: float) -> str:
+def format_brl(value: float | None) -> str:
     """
     Formata um valor numérico para o padrão monetário brasileiro.
 
@@ -140,10 +147,10 @@ def format_brl(value: float) -> str:
         String formatada no padrão 'R$ 1.234,56'.
     """
     try:
-        val = float(value)
+        val = float(value) if value is not None else 0.0
     except (TypeError, ValueError):
         val = 0.0
-    if val != val:  # NaN guard
+    if not math.isfinite(val):
         val = 0.0
     formatted = f"{abs(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     sign = "-" if val < 0 else ""
@@ -192,11 +199,29 @@ def to_yfinance_ticker(ticker: str) -> str:
     return f"{base}.SA"
 
 
-def format_timestamp(dt: datetime) -> str:
+def format_timestamp(dt: datetime | str) -> str:
     """
-    Formata datetime para string legível no padrão brasileiro.
+    Formata datetime ou string ISO/SQLite UTC para string legível no padrão brasileiro (BRT).
     """
-    if dt.tzinfo is not None:
+    if isinstance(dt, str):
+        raw = dt.strip()
+        if not raw:
+            return ""
+        try:
+            if _SQLITE_UTC_RE.match(raw):
+                parsed = datetime.fromisoformat(raw).replace(tzinfo=timezone.utc).astimezone(BRT)
+            elif raw.endswith("Z"):
+                parsed = datetime.fromisoformat(raw[:-1] + "+00:00").astimezone(BRT)
+            else:
+                parsed = datetime.fromisoformat(raw)
+                parsed = parsed.replace(tzinfo=BRT) if parsed.tzinfo is None else parsed.astimezone(BRT)
+            return parsed.strftime("%d/%m/%Y %H:%M:%S") + " BRT"
+        except ValueError:
+            return raw
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BRT)
+    else:
         dt = dt.astimezone(BRT)
     return dt.strftime("%d/%m/%Y %H:%M:%S") + " BRT"
 
@@ -217,20 +242,32 @@ def truncate_text(text: str, max_len: int = 200) -> str:
     return text[: max_len - 3] + "..."
 
 
-def format_percent(value: float, decimals: int = 2) -> str:
+def format_percent(value: float | None, decimals: int = 2) -> str:
     """
     Formata valor como percentual no padrão brasileiro (0.10 -> '10,00%').
     """
-    pct = value * 100
+    try:
+        val = float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        val = 0.0
+    if not math.isfinite(val):
+        val = 0.0
+    pct = val * 100
     formatted = f"{pct:.{decimals}f}".replace(".", ",")
     return f"{formatted}%"
 
 
-def format_number(value: float, decimals: int = 2) -> str:
+def format_number(value: float | None, decimals: int = 2) -> str:
     """
     Formata número decimal no padrão brasileiro.
     """
-    formatted = f"{value:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try:
+        val = float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        val = 0.0
+    if not math.isfinite(val):
+        val = 0.0
+    formatted = f"{val:,.{decimals}f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return formatted
 
 

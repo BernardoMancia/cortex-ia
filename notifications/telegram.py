@@ -63,14 +63,18 @@ class TelegramNotifier:
         self._enabled = bool(self.token and self.chat_id)
 
         self.command_callbacks: dict[str, Any] = {}
+        self._command_parse_modes: dict[str, Optional[str]] = {}
         self._polling_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
-        self._session = requests.Session()
-        self._ipv4_session = requests.Session()
-        ipv4_adapter = _IPv4HTTPAdapter()
-        self._ipv4_session.mount('https://', ipv4_adapter)
-        self._ipv4_session.mount('http://', ipv4_adapter)
+        self._tls = threading.local()
+        self._sessions_lock = threading.Lock()
+        self._sessions: list[requests.Session] = []
+        self._primary_session: Optional[requests.Session] = None
+        self._primary_ipv4_session: Optional[requests.Session] = None
+        # Inicializa sessões da thread principal
+        self._primary_session = self._get_session()
+        self._primary_ipv4_session = self._get_ipv4_session()
 
         if self._enabled:
             logger.info('TelegramNotifier configurado — chat_id: %s', self.chat_id)
@@ -78,6 +82,85 @@ class TelegramNotifier:
             logger.warning(
                 'TelegramNotifier DESABILITADO — token ou chat_id não configurado'
             )
+
+    def _get_session(self) -> requests.Session:
+        primary = self._primary_session
+        if primary is not None and (
+            'post' in getattr(primary, '__dict__', {}) or 'get' in getattr(primary, '__dict__', {})
+        ):
+            return primary
+        sess = getattr(self._tls, 'session', None)
+        if sess is None:
+            sess = requests.Session()
+            adapter = HTTPAdapter(pool_connections=2, pool_maxsize=4)
+            sess.mount('https://', adapter)
+            sess.mount('http://', adapter)
+            self._tls.session = sess
+            with self._sessions_lock:
+                self._sessions.append(sess)
+        return sess
+
+    def _get_ipv4_session(self) -> requests.Session:
+        primary = self._primary_ipv4_session
+        if primary is not None and (
+            'post' in getattr(primary, '__dict__', {}) or 'get' in getattr(primary, '__dict__', {})
+        ):
+            return primary
+        sess = getattr(self._tls, 'ipv4_session', None)
+        if sess is None:
+            sess = requests.Session()
+            ipv4_adapter = _IPv4HTTPAdapter(pool_connections=2, pool_maxsize=4)
+            sess.mount('https://', ipv4_adapter)
+            sess.mount('http://', ipv4_adapter)
+            self._tls.ipv4_session = sess
+            with self._sessions_lock:
+                self._sessions.append(sess)
+        return sess
+
+    @property
+    def _session(self) -> requests.Session:
+        return self._get_session()
+
+    @_session.setter
+    def _session(self, session: requests.Session) -> None:
+        self._tls.session = session
+        self._primary_session = session
+        with self._sessions_lock:
+            if session not in self._sessions:
+                self._sessions.append(session)
+
+    @property
+    def _ipv4_session(self) -> requests.Session:
+        return self._get_ipv4_session()
+
+    @_ipv4_session.setter
+    def _ipv4_session(self, session: requests.Session) -> None:
+        self._tls.ipv4_session = session
+        self._primary_ipv4_session = session
+        with self._sessions_lock:
+            if session not in self._sessions:
+                self._sessions.append(session)
+
+    def close(self) -> None:
+        """Encerra a thread de polling e fecha todas as sessões HTTP criadas pelas threads."""
+        self.stop_polling()
+        with self._sessions_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        self._primary_session = None
+        self._primary_ipv4_session = None
+        for sess in sessions:
+            try:
+                sess.close()
+            except Exception as exc:
+                logger.debug('Erro ao fechar sessão HTTP do Telegram: %s', exc)
+        self._tls = threading.local()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _scrub(self, value: Any) -> str:
         """Remove o bot token e outros segredos antes de registrar em logs."""
@@ -129,9 +212,15 @@ class TelegramNotifier:
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
             return self._ipv4_session.get(url, params=params, timeout=timeout)
 
-    def register_command(self, command: str, callback: Any) -> None:
+    def register_command(
+        self,
+        command: str,
+        callback: Any,
+        parse_mode: Optional[str] = 'Markdown',
+    ) -> None:
         """Registra um callback para um comando específico (ex: '/status')."""
         self.command_callbacks[command] = callback
+        self._command_parse_modes[command] = parse_mode
 
     def start_polling(self) -> None:
         """Inicia a thread de polling para receber comandos interativos (idempotente)."""
@@ -156,10 +245,63 @@ class TelegramNotifier:
             self._polling_thread.join(timeout=3.0)
 
     def _authorized_chats(self) -> set[str]:
-        chats = {str(self.chat_id)} if self.chat_id else set()
-        if self.channel_id:
-            chats.add(str(self.channel_id))
-        return chats
+        """Autoriza exclusivamente `self.chat_id` para execução de comandos (nunca `channel_id`)."""
+        return {str(self.chat_id)} if self.chat_id else set()
+
+    def _process_updates(self, updates: list[dict[str, Any]], offset: int = 0) -> int:
+        """Processa lote de updates do Telegram ignorando `channel_post` e validando `chat_id`."""
+        authorized = self._authorized_chats()
+        for item in updates or []:
+            if not isinstance(item, dict):
+                continue
+            if 'update_id' in item:
+                offset = int(item['update_id']) + 1
+            if 'channel_post' in item or 'edited_channel_post' in item:
+                continue
+            msg = item.get('message')
+            if not isinstance(msg, dict):
+                continue
+
+            chat_id = str(msg.get('chat', {}).get('id', '')).strip()
+            text = str(msg.get('text') or '')
+
+            # Valida autorização ANTES de registrar qualquer conteúdo da mensagem
+            if not chat_id or chat_id not in authorized:
+                if text.startswith('/'):
+                    logger.warning(
+                        'Tentativa de acesso não autorizada ao bot Telegram por chat_id=%s',
+                        chat_id or 'desconhecido',
+                    )
+                continue
+
+            if text.startswith('/'):
+                cmd = text.split(' ', 1)[0].split('@', 1)[0].strip()
+                safe_cmd = cmd.replace('\r', '').replace('\n', '')[:64]
+                logger.info('Comando Telegram autorizado recebido: %s (chat_id=%s)', safe_cmd, chat_id)
+
+                if cmd in self.command_callbacks:
+                    try:
+                        response = self.command_callbacks[cmd]()
+                        if response:
+                            cmd_mode = self._command_parse_modes.get(cmd, 'Markdown')
+                            self._send(str(response), parse_mode=cmd_mode, target_chat_id=chat_id)
+                    except Exception as cmd_err:
+                        clean_err = self._scrub(cmd_err)
+                        logger.error('Erro no comando %s: %s', safe_cmd, clean_err)
+                        self._send(
+                            f'❌ Erro ao executar comando: {self._escape_html(clean_err)}',
+                            parse_mode='HTML',
+                            target_chat_id=chat_id,
+                        )
+                else:
+                    available = ', '.join(sorted(self.command_callbacks.keys()))
+                    self._send(
+                        f'⚠️ Comando desconhecido: <code>{self._escape_html(safe_cmd)}</code>\n'
+                        f'Comandos disponíveis: {self._escape_html(available)}',
+                        parse_mode='HTML',
+                        target_chat_id=chat_id,
+                    )
+        return offset
 
     def _poll_updates(self) -> None:
         offset = 0
@@ -179,48 +321,7 @@ class TelegramNotifier:
 
                 if resp.status_code == 200:
                     data = resp.json()
-                    authorized = self._authorized_chats()
-                    for item in data.get('result', []):
-                        offset = item['update_id'] + 1
-                        msg = item.get('message') or item.get('channel_post') or {}
-                        chat_id = str(msg.get('chat', {}).get('id', '')).strip()
-                        text = str(msg.get('text') or '')
-
-                        # Valida autorização ANTES de registrar qualquer conteúdo da mensagem
-                        if not chat_id or chat_id not in authorized:
-                            if text.startswith('/'):
-                                logger.warning(
-                                    'Tentativa de acesso não autorizada ao bot Telegram por chat_id=%s',
-                                    chat_id or 'desconhecido',
-                                )
-                            continue
-
-                        if text.startswith('/'):
-                            cmd = text.split(' ', 1)[0].split('@', 1)[0].strip()
-                            safe_cmd = cmd.replace('\r', '').replace('\n', '')[:64]
-                            logger.info('Comando Telegram autorizado recebido: %s (chat_id=%s)', safe_cmd, chat_id)
-
-                            if cmd in self.command_callbacks:
-                                try:
-                                    response = self.command_callbacks[cmd]()
-                                    if response:
-                                        self._send(str(response), target_chat_id=chat_id)
-                                except Exception as cmd_err:
-                                    clean_err = self._scrub(cmd_err)
-                                    logger.error('Erro no comando %s: %s', safe_cmd, clean_err)
-                                    self._send(
-                                        f'❌ Erro ao executar comando: {self._escape_html(clean_err)}',
-                                        parse_mode='HTML',
-                                        target_chat_id=chat_id,
-                                    )
-                            else:
-                                available = ', '.join(sorted(self.command_callbacks.keys()))
-                                self._send(
-                                    f'⚠️ Comando desconhecido: <code>{self._escape_html(safe_cmd)}</code>\n'
-                                    f'Comandos disponíveis: {self._escape_html(available)}',
-                                    parse_mode='HTML',
-                                    target_chat_id=chat_id,
-                                )
+                    offset = self._process_updates(data.get('result', []), offset=offset)
                 else:
                     logger.warning(
                         'Polling Telegram retornou HTTP %d: %s',

@@ -319,10 +319,49 @@ def _fetch_session(db: Any, token: str, touch: bool) -> Optional[dict[str, Any]]
         session = db.get_valid_session(token, max_idle_seconds=idle_limit)
         if touch and session is not None and hasattr(db, "touch_session"):
             db.touch_session(token)
-    else:
-        if touch and session is not None and hasattr(db, "touch_session"):
-            db.touch_session(token)
     return session
+
+
+def require_authenticated_request(
+    request: Request,
+    enforce_csrf: bool = False,
+    touch: bool = False,
+) -> dict[str, Any]:
+    """
+    Valida sessão autenticada da requisição, aplicando verificação CSRF opcional
+    (ex.: em `/api/auth/logout` e mutações de estado) e controle explícito de `touch`.
+    """
+    from data.database import DatabaseManager
+
+    token = extract_session_token(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Não autenticado. Por favor faça login.",
+        )
+
+    db = DatabaseManager()
+    session = _fetch_session(db, token, touch=touch)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Sessão expirada ou inválida.",
+        )
+
+    if enforce_csrf:
+        validate_csrf_for_mutation(request, token, session)
+
+    user = db.get_user_by_id(session["user_id"])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuário não encontrado.",
+        )
+
+    user_out = dict(user)
+    user_out["session_token"] = token
+    user_out["csrf_token"] = derive_csrf_token(token, session)
+    return user_out
 
 
 def get_current_user(request: Request) -> dict[str, Any]:

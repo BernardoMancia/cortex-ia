@@ -100,11 +100,11 @@ class MarketScheduler:
             return dt.replace(tzinfo=BRT_TZ)
         return dt.astimezone(BRT_TZ)
 
-    def is_market_open(self) -> bool:
+    def is_market_open(self, dt: datetime | None = None) -> bool:
         """
-        Verifica se o mercado B3 está aberto no momento atual.
+        Verifica se o mercado B3 está aberto no momento informado (ou atual em BRT).
         """
-        now = datetime.now(BRT_TZ)
+        now = self._resolve_brt(dt)
         current_time = now.time()
         current_date = now.date()
 
@@ -236,21 +236,24 @@ class MarketScheduler:
 
     def add_business_days(self, start_date: date, business_days: int = 2) -> date:
         """
-        Avança `business_days` dias úteis de pregão da B3 a partir de `start_date`
+        Avança (ou retrocede) `business_days` dias úteis de pregão da B3 a partir de `start_date`
         (ex: liquidação financeira D+2 de vendas de ações na B3), pulando fins de
         semana, feriados fixos/móveis e fechamentos bancários de fim de ano.
         """
         curr = start_date
-        # Se a operação ocorreu em data não útil (ex: registro retroativo), alinha ao próximo pregão
+        max_iter = max(60, abs(int(business_days)) * 4 + 30)
+        step = -1 if int(business_days) < 0 else 1
+
+        # Se a operação ocorreu em data não útil (ex: registro retroativo), alinha ao pregão na direção do passo
         safety = 0
-        while not self.is_business_day(curr) and safety < 15:
-            curr += timedelta(days=1)
+        while not self.is_business_day(curr) and safety < 30:
+            curr += timedelta(days=step)
             safety += 1
 
-        remaining = max(0, int(business_days))
+        remaining = abs(int(business_days))
         safety = 0
-        while remaining > 0 and safety < 60:
-            curr += timedelta(days=1)
+        while remaining > 0 and safety < max_iter:
+            curr += timedelta(days=step)
             safety += 1
             if self.is_business_day(curr):
                 remaining -= 1
@@ -268,25 +271,33 @@ class MarketScheduler:
         now_sec = now.hour * 3600 + now.minute * 60 + now.second
         return (close_sec - max(0, int(minutes)) * 60) <= now_sec <= close_sec
 
-    def time_to_next_open(self) -> timedelta:
+    def time_to_next_open(self, dt: datetime | None = None) -> timedelta:
         """Calcula o tempo até a próxima abertura do mercado."""
-        now = datetime.now(BRT_TZ)
+        now = self._resolve_brt(dt)
         today = now.date()
         open_time = self.get_market_open_time(today)
 
         if self.is_business_day(today):
-            today_open = datetime.combine(today, open_time, tzinfo=BRT_TZ)
+            today_open = datetime(
+                today.year, today.month, today.day,
+                open_time.hour, open_time.minute, open_time.second,
+                tzinfo=BRT_TZ,
+            )
             if now < today_open:
                 return today_open - now
 
         next_day = today + timedelta(days=1)
         safety_counter = 0
-        while not self.is_business_day(next_day) and safety_counter < 15:
+        while not self.is_business_day(next_day) and safety_counter < 30:
             next_day += timedelta(days=1)
             safety_counter += 1
 
         next_open_time = self.get_market_open_time(next_day)
-        next_open = datetime.combine(next_day, next_open_time, tzinfo=BRT_TZ)
+        next_open = datetime(
+            next_day.year, next_day.month, next_day.day,
+            next_open_time.hour, next_open_time.minute, next_open_time.second,
+            tzinfo=BRT_TZ,
+        )
         delta = next_open - now
 
         logger.debug(
@@ -299,17 +310,30 @@ class MarketScheduler:
         """Retorna horários das janelas de manutenção do sistema: [06:00, 19:00, 23:00]."""
         return list(MAINTENANCE_WINDOWS)
 
-    def get_active_maintenance_window(self, dt: datetime | None = None) -> tuple[date, time] | None:
+    def get_active_maintenance_window(
+        self,
+        dt: datetime | None = None,
+        tolerance_minutes: int = MAINTENANCE_TOLERANCE_MINUTES,
+    ) -> tuple[date, time] | None:
         """Retorna a chave `(data, horário_janela)` se estiver dentro da tolerância de manutenção."""
         now = self._resolve_brt(dt)
-        current_minutes = now.hour * 60 + now.minute
+        base_date = now.date()
+        tol_seconds = max(0, int(tolerance_minutes)) * 60
 
-        for maint_time in MAINTENANCE_WINDOWS:
-            maint_minutes = maint_time.hour * 60 + maint_time.minute
-            diff = abs(current_minutes - maint_minutes)
-            diff = min(diff, 1440 - diff)
-            if diff <= MAINTENANCE_TOLERANCE_MINUTES:
-                return (now.date(), maint_time)
+        for day_offset in (-1, 0, 1):
+            cand_date = base_date + timedelta(days=day_offset)
+            for maint_time in MAINTENANCE_WINDOWS:
+                cand_dt = datetime(
+                    cand_date.year,
+                    cand_date.month,
+                    cand_date.day,
+                    maint_time.hour,
+                    maint_time.minute,
+                    maint_time.second,
+                    tzinfo=BRT_TZ,
+                )
+                if abs((now - cand_dt).total_seconds()) <= tol_seconds:
+                    return (cand_dt.date(), maint_time)
         return None
 
     def should_run_maintenance(self, dt: datetime | None = None) -> bool:

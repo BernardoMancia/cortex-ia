@@ -1,5 +1,5 @@
 # ============================================
-# Projeto Córtex IA (v2.8.0) - Dependências
+# Projeto Córtex IA (v2.9.1) - Dependências
 # Compatível com Python 3.10 - 3.12
 # ============================================
 
@@ -23,7 +23,7 @@ feedparser>=6.0
 
 # NLP & Gemini Interactions API Sentiment
 # (Opcional para modo 'full' local: transformers>=4.35, torch>=2.0)
-google-genai>=2.20.0
+google-genai>=2.30.1
 
 # Telegram
 python-telegram-bot>=20.0

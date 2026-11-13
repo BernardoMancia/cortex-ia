@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Córtex IA — Safe Remote VPS Deployment Script (v2.8.0).
+Córtex IA — Safe Remote VPS Deployment Script (v2.9.1).
 
 Security & Data-Protection Guarantees:
 - Reads `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_SSH_KEY` (preferred) or
@@ -191,7 +191,7 @@ def run_remote(
     check: bool = True,
     sudo_password: str | None = None,
 ) -> tuple[int, str, str]:
-    stdin, stdout, stderr = ssh.exec_command(command, timeout=180)
+    stdin, stdout, stderr = ssh.exec_command(command, timeout=360)
     if sudo_password is not None:
         stdin.write(sudo_password + "\n")
         stdin.flush()
@@ -218,6 +218,36 @@ def run_remote_sudo(
             f"sudo sem senha indisponível na VPS para '{command}' e DEPLOY_PASSWORD não foi fornecida."
         )
     return run_remote(ssh, f"sudo -S -p '' {command}", check=True, sudo_password=password)
+
+
+def render_systemd_service(template_text: str, user: str, remote_dir: str) -> str:
+    """Renderiza `cortex-ia.service` ajustando User, Group, WorkingDirectory e LimitNOFILE."""
+    rendered_lines: list[str] = []
+    has_limit_nofile = False
+    for raw_line in template_text.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("User="):
+            rendered_lines.append(f"User={user}")
+        elif stripped.startswith("Group="):
+            rendered_lines.append(f"Group={user}")
+        elif stripped.startswith("WorkingDirectory="):
+            rendered_lines.append(f"WorkingDirectory={remote_dir}")
+        elif stripped.startswith("LimitNOFILE="):
+            has_limit_nofile = True
+            rendered_lines.append(raw_line)
+        else:
+            rendered_lines.append(raw_line.replace("/home/servico/cortex-ia", remote_dir))
+
+    if not has_limit_nofile:
+        inserted: list[str] = []
+        for line in rendered_lines:
+            inserted.append(line)
+            if line.strip().startswith("TimeoutStopSec="):
+                inserted.append("LimitNOFILE=65535")
+                has_limit_nofile = True
+        rendered_lines = inserted
+
+    return "\n".join(rendered_lines) + "\n"
 
 
 def main() -> int:
@@ -295,7 +325,7 @@ def main() -> int:
                 f"mkdir -p {quoted_remote}/backups {quoted_remote}/data {quoted_remote}/logs && "
                 f"if [ -f {quoted_remote}/data/cortex.db ]; then "
                 f"  if command -v sqlite3 >/dev/null 2>&1; then "
-                f"    sqlite3 {quoted_remote}/data/cortex.db \".backup '{remote_dir}/backups/pre_deploy_cortex_{timestamp}.db'\"; "
+                f"    (cd {quoted_remote} && sqlite3 data/cortex.db \".backup 'backups/pre_deploy_cortex_{timestamp}.db'\"); "
                 f"  else "
                 f"    cp -p {quoted_remote}/data/cortex.db {quoted_remote}/backups/pre_deploy_cortex_{timestamp}.db; "
                 f"  fi; "
@@ -314,30 +344,44 @@ def main() -> int:
             run_remote(ssh, backup_cmd, check=True)
 
             remote_tmp_archive = f"/tmp/cortex_release_{timestamp}.tar.gz"
+            remote_tmp_service = f"/tmp/cortex_service_{timestamp}.unit"
+            local_service = Path(tmp_dir) / f"cortex-ia_{timestamp}.service"
+            service_template = (ROOT_DIR / "scripts" / "cortex-ia.service").read_text(encoding="utf-8")
+            local_service.write_text(
+                render_systemd_service(service_template, user=user, remote_dir=remote_dir),
+                encoding="utf-8",
+                newline="\n",
+            )
+
             print("[2/5] Enviando pacote de código via SCP...")
             with SCPClient(ssh.get_transport()) as scp:
                 scp.put(str(local_archive), remote_path=remote_tmp_archive)
+                if not args.skip_restart:
+                    scp.put(str(local_service), remote_path=remote_tmp_service)
 
             print("[3/5] Extraindo código atualizado e ajustando permissões de scripts...")
             extract_cmd = (
                 f"tar -xzf {shlex.quote(remote_tmp_archive)} -C {quoted_remote} && "
                 f"rm -f {shlex.quote(remote_tmp_archive)} && "
                 f"find {quoted_remote} -maxdepth 3 -name '*.sh' -exec sed -i 's/\\r$//' {{}} + && "
-                f"chmod +x {quoted_remote}/*.sh {quoted_remote}/scripts/*.sh {quoted_remote}/deploy/*.sh 2>/dev/null || true"
+                f"chmod +x {quoted_remote}/*.sh {quoted_remote}/scripts/*.sh {quoted_remote}/deploy/*.sh {quoted_remote}/docker/*.sh 2>/dev/null || true"
             )
             run_remote(ssh, extract_cmd, check=True)
 
             print("[4/5] Atualizando dependências Python no .venv remoto...")
+            remote_tmp_req = f"/tmp/cortex_requirements_{timestamp}.txt"
             pip_cmd = (
                 f"if [ ! -x {quoted_remote}/.venv/bin/python ]; then "
                 f"  python3 -m venv {quoted_remote}/.venv; "
                 f"fi && "
-                f"{quoted_remote}/.venv/bin/python -m pip install --prefer-binary -q -r {quoted_remote}/requirements.txt"
+                f"grep -viE '^\\s*metatrader5' {quoted_remote}/requirements.txt > {shlex.quote(remote_tmp_req)} && "
+                f"{quoted_remote}/.venv/bin/python -m pip install --prefer-binary -q -r {shlex.quote(remote_tmp_req)}; "
+                f"rc=$?; rm -f {shlex.quote(remote_tmp_req)}; exit $rc"
             )
             run_remote(ssh, pip_cmd, check=True)
 
             if not args.skip_restart:
-                print("[5/5] Atualizando unidade systemd e reiniciando cortex-ia.service...")
+                print("[5/5] Atualizando unidade systemd e reiniciando serviços...")
                 run_remote_sudo(
                     ssh,
                     f"sh -c 'mkdir -p /LOGS-PROJETOS/cortex-ia && chown {shlex.quote(user)}:{shlex.quote(user)} /LOGS-PROJETOS/cortex-ia'",
@@ -345,9 +389,42 @@ def main() -> int:
                 )
                 run_remote_sudo(
                     ssh,
-                    f"cp {quoted_remote}/scripts/cortex-ia.service /etc/systemd/system/cortex-ia.service",
+                    f"sh -c 'install -m 0644 {shlex.quote(remote_tmp_service)} /etc/systemd/system/cortex-ia.service && rm -f {shlex.quote(remote_tmp_service)}'",
                     password,
                 )
+
+                has_bridge_code, _, _ = run_remote(
+                    ssh,
+                    "command -v docker >/dev/null 2>&1 && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx mt5-bridge",
+                    check=False,
+                )
+                if has_bridge_code == 0:
+                    print("[5/5] Container mt5-bridge detectado — atualizando/reiniciando via Docker Compose...")
+                    run_remote(
+                        ssh,
+                        f"cd {quoted_remote}/docker && docker compose --env-file ../.env up -d --build",
+                        check=True,
+                    )
+                else:
+                    try:
+                        _, sudo_names, _ = run_remote_sudo(
+                            ssh,
+                            "docker ps -a --format '{{.Names}}'",
+                            password,
+                        )
+                        has_sudo_bridge = "mt5-bridge" in {
+                            ln.strip() for ln in sudo_names.splitlines()
+                        }
+                    except Exception:
+                        has_sudo_bridge = False
+                    if has_sudo_bridge:
+                        print("[5/5] Container mt5-bridge detectado (sudo) — atualizando/reiniciando via Docker Compose...")
+                        run_remote_sudo(
+                            ssh,
+                            f"sh -c 'cd {quoted_remote}/docker && docker compose --env-file ../.env up -d --build'",
+                            password,
+                        )
+
                 run_remote_sudo(ssh, "systemctl daemon-reload", password)
                 run_remote_sudo(ssh, "systemctl enable cortex-ia.service", password)
                 run_remote_sudo(ssh, "systemctl restart cortex-ia.service", password)

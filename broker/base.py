@@ -104,12 +104,22 @@ class BrokerBase(ABC):
 
     @abstractmethod
     def get_balance(self) -> float:
-        """Retorna o saldo em caixa disponível para operações."""
+        """
+        Retorna o saldo em caixa disponível para operações.
+
+        Raises:
+            ConnectionError: Quando a comunicação com a corretora real falha.
+        """
         ...
 
     @abstractmethod
     def get_equity(self) -> float:
-        """Retorna o patrimônio total (saldo + valor das posições abertas)."""
+        """
+        Retorna o patrimônio total (saldo + valor das posições abertas).
+
+        Raises:
+            ConnectionError: Quando a comunicação com a corretora real falha.
+        """
         ...
 
     @abstractmethod

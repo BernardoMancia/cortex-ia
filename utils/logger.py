@@ -12,12 +12,15 @@ import os
 import sys
 import threading
 from collections import deque
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Callable, Final
+from zoneinfo import ZoneInfo
 
 from utils.log_db_handler import SQLiteLogHandler, scrub_secrets
 
+_BRT: Final[ZoneInfo] = ZoneInfo("America/Sao_Paulo")
 _MAX_BYTES: Final[int] = 10 * 1024 * 1024
 _BACKUP_COUNT: Final[int] = 5
 _LOG_FORMAT: Final[str] = "[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s"
@@ -50,7 +53,13 @@ def _supports_color() -> bool:
 
 
 class _ScrubbingFormatter(logging.Formatter):
-    """Formatter que mascara tokens sensíveis automaticamente."""
+    """Formatter que renderiza timestamps em BRT e mascara tokens sensíveis automaticamente."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        dt = datetime.fromtimestamp(record.created, tz=_BRT)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat(timespec="seconds")
 
     def format(self, record: logging.LogRecord) -> str:
         return scrub_secrets(super().format(record))
@@ -84,7 +93,7 @@ class LogBroadcastHandler(logging.Handler):
     """Handler que armazena mensagens recentes em buffer e notifica listeners em tempo real."""
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(level=logging.INFO)
         self.setFormatter(_ScrubbingFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT))
 
     def emit(self, record: logging.LogRecord) -> None:
@@ -103,6 +112,7 @@ class LogBroadcastHandler(logging.Handler):
 
 
 _broadcast_handler = LogBroadcastHandler()
+_broadcast_handler.setLevel(logging.INFO)
 _sqlite_handler: SQLiteLogHandler | None = None
 _sqlite_init_attempted: bool = False
 _logger_lock = threading.Lock()
@@ -148,6 +158,50 @@ def remove_log_listener(callback: Callable[[str], None]) -> None:
             _log_listeners.remove(callback)
 
 
+def flush_log_handlers() -> None:
+    """Força flush imediato do handler SQLite centralizado se ativo."""
+    if _sqlite_handler is not None:
+        try:
+            _sqlite_handler.flush()
+        except Exception:
+            pass
+
+
+def _attach_standard_handlers(
+    target_logger: logging.Logger,
+    name: str,
+    resolved_level: int,
+    log_dir: Path,
+) -> None:
+    """Anexa handlers de arquivo rotativo, console colorido, WebSocket e SQLite a `target_logger`."""
+    target_logger.setLevel(resolved_level)
+    target_logger.propagate = False
+
+    safe_name = name.replace(".", "_").replace("/", "_").replace("\\", "_")
+    log_file = log_dir / f"{safe_name}.log"
+
+    file_handler = RotatingFileHandler(
+        filename=str(log_file),
+        maxBytes=_MAX_BYTES,
+        backupCount=_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setLevel(resolved_level)
+    file_handler.setFormatter(_ScrubbingFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT))
+    target_logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler(stream=sys.stderr)
+    console_handler.setLevel(resolved_level)
+    console_handler.setFormatter(_ColorFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT))
+    target_logger.addHandler(console_handler)
+
+    target_logger.addHandler(_broadcast_handler)
+
+    sqlite_handler = _get_shared_sqlite_handler()
+    if sqlite_handler is not None:
+        target_logger.addHandler(sqlite_handler)
+
+
 def setup_logger(
     name: str,
     level: str | int | None = None,
@@ -156,14 +210,10 @@ def setup_logger(
 ) -> logging.Logger:
     """
     Configura e retorna um logger com handlers de arquivo, console, broadcast e SQLite singleton.
+    Também garante que o logger raiz de aplicação `'cortex'` esteja configurado para capturar
+    automaticamente todos os submódulos que usam `logging.getLogger('cortex.xxx')`.
     """
     with _logger_lock:
-        if name in _configured_loggers:
-            existing = logging.getLogger(name)
-            if verbose:
-                existing.setLevel(logging.DEBUG)
-            return existing
-
         from config.settings import settings
 
         if verbose and level is None:
@@ -180,34 +230,34 @@ def setup_logger(
         log_dir = Path(log_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
 
+        if "cortex" not in _configured_loggers and (name == "cortex" or name.startswith("cortex.")):
+            parent_level = logging.DEBUG if verbose else getattr(logging, str(settings.LOG_LEVEL).upper(), logging.INFO)
+            parent_logger = logging.getLogger("cortex")
+            _attach_standard_handlers(parent_logger, "cortex", parent_level, log_dir)
+            _configured_loggers.add("cortex")
+            if name == "cortex":
+                if level is not None and resolved_level != parent_level:
+                    parent_logger.setLevel(resolved_level)
+                    for h in parent_logger.handlers:
+                        if isinstance(h, (RotatingFileHandler, logging.StreamHandler)) and not isinstance(
+                            h, (LogBroadcastHandler, SQLiteLogHandler)
+                        ):
+                            h.setLevel(resolved_level)
+                return parent_logger
+
+        if name in _configured_loggers:
+            existing = logging.getLogger(name)
+            if verbose:
+                existing.setLevel(logging.DEBUG)
+                for h in existing.handlers:
+                    if isinstance(h, (RotatingFileHandler, logging.StreamHandler)) and not isinstance(
+                        h, (LogBroadcastHandler, SQLiteLogHandler)
+                    ):
+                        h.setLevel(logging.DEBUG)
+            return existing
+
         logger = logging.getLogger(name)
-        logger.setLevel(resolved_level)
-        logger.propagate = False
-
-        safe_name = name.replace(".", "_").replace("/", "_").replace("\\", "_")
-        log_file = log_dir / f"{safe_name}.log"
-
-        file_handler = RotatingFileHandler(
-            filename=str(log_file),
-            maxBytes=_MAX_BYTES,
-            backupCount=_BACKUP_COUNT,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(resolved_level)
-        file_handler.setFormatter(_ScrubbingFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT))
-        logger.addHandler(file_handler)
-
-        console_handler = logging.StreamHandler(stream=sys.stderr)
-        console_handler.setLevel(resolved_level)
-        console_handler.setFormatter(_ColorFormatter(fmt=_LOG_FORMAT, datefmt=_DATE_FORMAT))
-        logger.addHandler(console_handler)
-
-        logger.addHandler(_broadcast_handler)
-
-        sqlite_handler = _get_shared_sqlite_handler()
-        if sqlite_handler is not None:
-            logger.addHandler(sqlite_handler)
-
+        _attach_standard_handlers(logger, name, resolved_level, log_dir)
         _configured_loggers.add(name)
         return logger
 

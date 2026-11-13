@@ -6,8 +6,8 @@ services:
     container_name: mt5-bridge
     hostname: cortex-mt5-bridge
     init: true
-    env_file:
-      - ../.env
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "127.0.0.1:5000:5000" # MT5 REST Bridge API (estritamente loopback na VPS)
       - "127.0.0.1:6080:6080" # Diagnóstico Web VNC / noVNC (loopback; ativo apenas se VNC_PASSWORD estiver definida)
@@ -19,6 +19,13 @@ services:
       - TZ=America/Sao_Paulo
       - BRIDGE_HOST=0.0.0.0
       - BRIDGE_PORT=5000
+      - BRIDGE_API_KEY=${BRIDGE_API_KEY:-}
+      - MT5_LOGIN=${MT5_LOGIN:-}
+      - MT5_PASSWORD=${MT5_PASSWORD:-}
+      - MT5_SERVER=${MT5_SERVER:-ClearInvestimentos-CLEAR}
+      - MT5_STARTUP_SYMBOL=${MT5_STARTUP_SYMBOL:-EURUSD}
+      - MT5_STARTUP_PERIOD=${MT5_STARTUP_PERIOD:-H1}
+      - VNC_PASSWORD=${VNC_PASSWORD:-}
     healthcheck:
       test:
         [

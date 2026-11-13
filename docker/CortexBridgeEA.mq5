@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                              CortexBridgeEA.mq5  |
-//|                                   Projeto Cortex IA v2.9.0 (B3)  |
+//|                                   Projeto Cortex IA v2.9.1 (B3)  |
 //|  High-frequency local RPC bridge via MQL5 FILE_COMMON sandbox    |
 //|  Elimina dependencia de Named Pipes Win32 sob Wine/Linux 24/7.   |
 //+------------------------------------------------------------------+
 #property copyright "Projeto Cortex IA"
-#property version   "2.90"
+#property version   "2.91"
 
 string g_rpc_folder = "cortex_rpc";
 ulong  g_last_hb_ms = 0;
@@ -22,10 +22,17 @@ string JsonEscape(const string raw)
       ushort ch = StringGetCharacter(raw, i);
       if(ch == '"')       out += "\\\"";
       else if(ch == '\\') out += "\\\\";
+      else if(ch == 8)    out += "\\b";
+      else if(ch == 12)   out += "\\f";
       else if(ch == '\n') out += "\\n";
       else if(ch == '\r') out += "\\r";
       else if(ch == '\t') out += "\\t";
-      else if(ch >= 32)   out += ShortToString(ch);
+      else if(ch < 32 || ch == 127)
+         out += StringFormat("\\u%04X", (uint)ch);
+      else if(ch >= 0xD800 && ch <= 0xDFFF)
+         out += "\\uFFFD";
+      else
+         out += ShortToString(ch);
    }
    return out;
 }
@@ -41,23 +48,57 @@ string JsonDouble(const double val, const int digits = 8)
 }
 
 //+------------------------------------------------------------------+
-//| Escrita atomica UTF-8 (.tmp -> FileMove FILE_REWRITE)            |
+//| Offset em segundos entre relogio do servidor de trade e UTC      |
 //+------------------------------------------------------------------+
-bool WriteAtomicJson(const string final_rel_path, const string tmp_rel_path, const string payload)
+long GetServerTzOffsetSec()
 {
-   int h = FileOpen(tmp_rel_path, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON, '\n', CP_UTF8);
-   if(h == INVALID_HANDLE)
-      return false;
-   FileWriteString(h, payload);
-   FileFlush(h);
-   FileClose(h);
-   return FileMove(tmp_rel_path, FILE_COMMON, final_rel_path, FILE_COMMON | FILE_REWRITE);
+   if(!TerminalInfoInteger(TERMINAL_CONNECTED))
+      return 0;
+   return (long)(TimeTradeServer() - TimeGMT());
 }
 
 //+------------------------------------------------------------------+
-//| Atualiza heartbeat.json com estado vivo da conta e permissoes    |
+//| Verifica se terminal esta autenticado na corretora               |
 //+------------------------------------------------------------------+
-string BuildAccountStatusJson()
+bool IsBrokerAuthenticated()
+{
+   return (TerminalInfoInteger(TERMINAL_CONNECTED) != 0 && AccountInfoInteger(ACCOUNT_LOGIN) != 0);
+}
+
+//+------------------------------------------------------------------+
+//| Escrita atomica UTF-8 (.tmp -> FileMove FILE_REWRITE) c/ retry   |
+//+------------------------------------------------------------------+
+bool WriteAtomicJson(const string final_rel_path, const string tmp_rel_path, const string payload)
+{
+   int h = INVALID_HANDLE;
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      h = FileOpen(tmp_rel_path, FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON, '\n', CP_UTF8);
+      if(h != INVALID_HANDLE)
+         break;
+      Sleep(5);
+   }
+   if(h == INVALID_HANDLE)
+      return false;
+
+   FileWriteString(h, payload);
+   FileFlush(h);
+   FileClose(h);
+
+   for(int attempt = 0; attempt < 3; attempt++)
+   {
+      if(FileMove(tmp_rel_path, FILE_COMMON, final_rel_path, FILE_COMMON | FILE_REWRITE))
+         return true;
+      Sleep(5);
+   }
+   FileDelete(tmp_rel_path, FILE_COMMON);
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Monta payload JSON vivo da conta, permissoes e fuso do servidor  |
+//+------------------------------------------------------------------+
+string BuildAccountPayload()
 {
    bool term_connected = (TerminalInfoInteger(TERMINAL_CONNECTED) != 0);
    long login          = AccountInfoInteger(ACCOUNT_LOGIN);
@@ -67,6 +108,7 @@ string BuildAccountStatusJson()
    bool acc_trade      = (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) != 0);
    bool acc_expert     = (AccountInfoInteger(ACCOUNT_TRADE_EXPERT) != 0);
    bool trade_allowed  = (term_trade && mql_trade && acc_trade && acc_expert);
+   long tz_offset      = GetServerTzOffsetSec();
 
    string server   = AccountInfoString(ACCOUNT_SERVER);
    string currency = AccountInfoString(ACCOUNT_CURRENCY);
@@ -91,15 +133,17 @@ string BuildAccountStatusJson()
    j += "\"equity\":" + JsonDouble(equity, 2) + ",";
    j += "\"margin\":" + JsonDouble(margin, 2) + ",";
    j += "\"margin_free\":" + JsonDouble(free_m, 2) + ",";
-   j += "\"server_time\":" + IntegerToString((long)TimeCurrent());
+   j += "\"server_time\":" + IntegerToString((long)TimeCurrent()) + ",";
+   j += "\"tz_offset_sec\":" + IntegerToString(tz_offset);
    j += "}";
    return j;
 }
 
 void WriteHeartbeat()
 {
-   string payload = BuildAccountStatusJson();
-   WriteAtomicJson(g_rpc_folder + "\\heartbeat.json", g_rpc_folder + "\\heartbeat.tmp", payload);
+   string payload = BuildAccountPayload();
+   if(!WriteAtomicJson(g_rpc_folder + "\\heartbeat.json", g_rpc_folder + "\\heartbeat.tmp", payload))
+      Print("[CortexBridgeEA] AVISO: falha ao gravar heartbeat.json (err=", GetLastError(), ")");
    g_last_hb_ms = GetTickCount64();
 }
 
@@ -128,8 +172,8 @@ ENUM_TIMEFRAMES ResolveTimeframe(string tf)
    if(tf == "5"     || tf == "M5"  || tf == "5M")  return PERIOD_M5;
    if(tf == "15"    || tf == "M15" || tf == "15M") return PERIOD_M15;
    if(tf == "30"    || tf == "M30" || tf == "30M") return PERIOD_M30;
-   if(tf == "16385" || tf == "H1"  || tf == "1H" || tf == "60M") return PERIOD_H1;
-   if(tf == "16388" || tf == "H4"  || tf == "4H")  return PERIOD_H4;
+   if(tf == "60"    || tf == "16385" || tf == "H1"  || tf == "1H" || tf == "60M") return PERIOD_H1;
+   if(tf == "240"   || tf == "16388" || tf == "H4"  || tf == "4H")  return PERIOD_H4;
    if(tf == "16408" || tf == "D1"  || tf == "1D")  return PERIOD_D1;
    if(tf == "32769" || tf == "W1"  || tf == "1W")  return PERIOD_W1;
    if(tf == "49153" || tf == "MN1" || tf == "MN")  return PERIOD_MN1;
@@ -150,58 +194,82 @@ bool EnsureSymbolSelected(const string sym)
 }
 
 //+------------------------------------------------------------------+
+//| Serializa a posicao atualmente selecionada em JSON               |
+//+------------------------------------------------------------------+
+void AppendSelectedPositionJson(string &j, bool &first, const string filter_symbol, const long tz_offset)
+{
+   ulong ticket = (ulong)PositionGetInteger(POSITION_TICKET);
+   if(ticket == 0)
+      return;
+   string sym = PositionGetString(POSITION_SYMBOL);
+   if(StringLen(filter_symbol) > 0 && sym != filter_symbol)
+      return;
+
+   long   ptype   = PositionGetInteger(POSITION_TYPE);
+   long   magic   = PositionGetInteger(POSITION_MAGIC);
+   long   ptime   = PositionGetInteger(POSITION_TIME);
+   double vol     = PositionGetDouble(POSITION_VOLUME);
+   double popen   = PositionGetDouble(POSITION_PRICE_OPEN);
+   double pcurr   = PositionGetDouble(POSITION_PRICE_CURRENT);
+   double sl      = PositionGetDouble(POSITION_SL);
+   double tp      = PositionGetDouble(POSITION_TP);
+   double profit  = PositionGetDouble(POSITION_PROFIT);
+   string comment = PositionGetString(POSITION_COMMENT);
+
+   if(!first) j += ",";
+   first = false;
+   j += "{";
+   j += "\"ticket\":" + IntegerToString((long)ticket) + ",";
+   j += "\"symbol\":\"" + JsonEscape(sym) + "\",";
+   j += "\"type\":" + IntegerToString(ptype) + ",";
+   j += "\"magic\":" + IntegerToString(magic) + ",";
+   j += "\"time\":" + IntegerToString(ptime) + ",";
+   j += "\"tz_offset_sec\":" + IntegerToString(tz_offset) + ",";
+   j += "\"volume\":" + JsonDouble(vol, 4) + ",";
+   j += "\"price_open\":" + JsonDouble(popen, 4) + ",";
+   j += "\"price_current\":" + JsonDouble(pcurr, 4) + ",";
+   j += "\"sl\":" + JsonDouble(sl, 4) + ",";
+   j += "\"tp\":" + JsonDouble(tp, 4) + ",";
+   j += "\"profit\":" + JsonDouble(profit, 2) + ",";
+   j += "\"comment\":\"" + JsonEscape(comment) + "\"";
+   j += "}";
+}
+
+//+------------------------------------------------------------------+
 //| Comandos RPC                                                     |
 //+------------------------------------------------------------------+
 string HandlePositions(const long filter_ticket, const string filter_symbol)
 {
-   int total = PositionsTotal();
-   string j = "{\"ok\":true,\"positions\":[";
+   long tz_offset = GetServerTzOffsetSec();
+   string j = "{\"ok\":true,\"tz_offset_sec\":" + IntegerToString(tz_offset) + ",\"positions\":[";
    bool first = true;
-   for(int i = 0; i < total; i++)
+
+   if(filter_ticket > 0)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(filter_ticket > 0 && (long)ticket != filter_ticket)
-         continue;
-      string sym = PositionGetString(POSITION_SYMBOL);
-      if(StringLen(filter_symbol) > 0 && sym != filter_symbol)
-         continue;
-
-      long   ptype   = PositionGetInteger(POSITION_TYPE);
-      long   magic   = PositionGetInteger(POSITION_MAGIC);
-      long   ptime   = PositionGetInteger(POSITION_TIME);
-      double vol     = PositionGetDouble(POSITION_VOLUME);
-      double popen   = PositionGetDouble(POSITION_PRICE_OPEN);
-      double pcurr   = PositionGetDouble(POSITION_PRICE_CURRENT);
-      double sl      = PositionGetDouble(POSITION_SL);
-      double tp      = PositionGetDouble(POSITION_TP);
-      double profit  = PositionGetDouble(POSITION_PROFIT);
-      string comment = PositionGetString(POSITION_COMMENT);
-
-      if(!first) j += ",";
-      first = false;
-      j += "{";
-      j += "\"ticket\":" + IntegerToString((long)ticket) + ",";
-      j += "\"symbol\":\"" + JsonEscape(sym) + "\",";
-      j += "\"type\":" + IntegerToString(ptype) + ",";
-      j += "\"magic\":" + IntegerToString(magic) + ",";
-      j += "\"time\":" + IntegerToString(ptime) + ",";
-      j += "\"volume\":" + JsonDouble(vol, 4) + ",";
-      j += "\"price_open\":" + JsonDouble(popen, 4) + ",";
-      j += "\"price_current\":" + JsonDouble(pcurr, 4) + ",";
-      j += "\"sl\":" + JsonDouble(sl, 4) + ",";
-      j += "\"tp\":" + JsonDouble(tp, 4) + ",";
-      j += "\"profit\":" + JsonDouble(profit, 2) + ",";
-      j += "\"comment\":\"" + JsonEscape(comment) + "\"";
-      j += "}";
+      if(PositionSelectByTicket((ulong)filter_ticket))
+         AppendSelectedPositionJson(j, first, filter_symbol, tz_offset);
    }
+   else
+   {
+      int total = PositionsTotal();
+      for(int i = total - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0)
+            continue;
+         AppendSelectedPositionJson(j, first, filter_symbol, tz_offset);
+      }
+   }
+
    j += "]}";
    return j;
 }
 
 string HandleSymbolInfo(const string sym)
 {
+   if(!IsBrokerAuthenticated())
+      return "{\"ok\":false,\"error_code\":-10004,\"error\":\"waiting_broker_auth\"}";
+
    if(!EnsureSymbolSelected(sym))
       return "{\"ok\":false,\"error_code\":4301,\"error\":\"Symbol not found\"}";
 
@@ -209,7 +277,7 @@ string HandleSymbolInfo(const string sym)
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
    if(point <= 0.0)
    {
-      for(int k = 0; k < 10 && point <= 0.0; k++)
+      for(int k = 0; k < 8 && point <= 0.0; k++)
       {
          Sleep(50);
          digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
@@ -219,16 +287,18 @@ string HandleSymbolInfo(const string sym)
    if(point <= 0.0)
       return "{\"ok\":false,\"error_code\":4301,\"error\":\"Symbol metadata unavailable\"}";
 
-   double bid      = SymbolInfoDouble(sym, SYMBOL_BID);
-   double ask      = SymbolInfoDouble(sym, SYMBOL_ASK);
-   double last_px  = SymbolInfoDouble(sym, SYMBOL_LAST);
-   double vmin     = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
-   double vmax     = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
-   double vstep    = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
-   long   fmode    = SymbolInfoInteger(sym, SYMBOL_FILLING_MODE);
-   long   tmode    = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
-   string desc     = SymbolInfoString(sym, SYMBOL_DESCRIPTION);
-   string curr_p   = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+   double bid           = SymbolInfoDouble(sym, SYMBOL_BID);
+   double ask           = SymbolInfoDouble(sym, SYMBOL_ASK);
+   double last_px       = SymbolInfoDouble(sym, SYMBOL_LAST);
+   double vmin          = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double vmax          = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double vstep         = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   long   fmode         = SymbolInfoInteger(sym, SYMBOL_FILLING_MODE);
+   long   tmode         = SymbolInfoInteger(sym, SYMBOL_TRADE_MODE);
+   int    trade_exemode = (int)SymbolInfoInteger(sym, SYMBOL_TRADE_EXEMODE);
+   int    stops_level   = (int)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+   string desc          = SymbolInfoString(sym, SYMBOL_DESCRIPTION);
+   string curr_p        = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
 
    int out_digits = (digits > 0 ? digits : 2);
    string j = "{\"ok\":true,\"data\":{";
@@ -244,20 +314,25 @@ string HandleSymbolInfo(const string sym)
    j += "\"volume_max\":" + JsonDouble(vmax, 4) + ",";
    j += "\"volume_step\":" + JsonDouble(vstep, 4) + ",";
    j += "\"filling_mode\":" + IntegerToString(fmode) + ",";
-   j += "\"trade_mode\":" + IntegerToString(tmode);
+   j += "\"trade_mode\":" + IntegerToString(tmode) + ",";
+   j += "\"trade_exemode\":" + IntegerToString(trade_exemode) + ",";
+   j += "\"stops_level\":" + IntegerToString(stops_level);
    j += "}}";
    return j;
 }
 
 string HandleTick(const string sym)
 {
+   if(!IsBrokerAuthenticated())
+      return "{\"ok\":false,\"error_code\":-10004,\"error\":\"waiting_broker_auth\"}";
+
    if(!EnsureSymbolSelected(sym))
       return "{\"ok\":false,\"error_code\":4301,\"error\":\"Symbol not found\"}";
 
    MqlTick tick;
    ZeroMemory(tick);
    bool got = SymbolInfoTick(sym, tick);
-   for(int k = 0; k < 15 && (!got || (tick.bid <= 0.0 && tick.ask <= 0.0 && tick.last <= 0.0)); k++)
+   for(int k = 0; k < 8 && (!got || (tick.bid <= 0.0 && tick.ask <= 0.0 && tick.last <= 0.0)); k++)
    {
       Sleep(50);
       got = SymbolInfoTick(sym, tick);
@@ -267,8 +342,9 @@ string HandleTick(const string sym)
 
    int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    int out_digits = (digits > 0 ? digits : 2);
+   long tz_offset = GetServerTzOffsetSec();
 
-   string j = "{\"ok\":true,\"data\":{";
+   string j = "{\"ok\":true,\"tz_offset_sec\":" + IntegerToString(tz_offset) + ",\"data\":{";
    j += "\"time\":" + IntegerToString((long)tick.time) + ",";
    j += "\"bid\":" + JsonDouble(tick.bid, out_digits) + ",";
    j += "\"ask\":" + JsonDouble(tick.ask, out_digits) + ",";
@@ -276,35 +352,41 @@ string HandleTick(const string sym)
    j += "\"volume\":" + IntegerToString((long)tick.volume) + ",";
    j += "\"time_msc\":" + IntegerToString((long)tick.time_msc) + ",";
    j += "\"flags\":" + IntegerToString((long)tick.flags) + ",";
-   j += "\"volume_real\":" + JsonDouble(tick.volume_real, 4);
+   j += "\"volume_real\":" + JsonDouble(tick.volume_real, 4) + ",";
+   j += "\"tz_offset_sec\":" + IntegerToString(tz_offset);
    j += "}}";
    return j;
 }
 
-string HandleRates(const string sym, const string tf_str, int count)
+string HandleRates(const string sym, const string tf_str, int start_pos, int count)
 {
+   if(!IsBrokerAuthenticated())
+      return "{\"ok\":false,\"error_code\":-10004,\"error\":\"waiting_broker_auth\"}";
+
    if(!EnsureSymbolSelected(sym))
       return "{\"ok\":false,\"error_code\":4301,\"error\":\"Symbol not found\"}";
 
+   if(start_pos < 0) start_pos = 0;
    if(count < 1) count = 1;
    if(count > 1000) count = 1000;
    ENUM_TIMEFRAMES tf = ResolveTimeframe(tf_str);
 
    MqlRates rates[];
    ArraySetAsSeries(rates, false);
-   int copied = CopyRates(sym, tf, 0, count, rates);
-   for(int k = 0; k < 20 && copied <= 0; k++)
+   int copied = CopyRates(sym, tf, start_pos, count, rates);
+   for(int k = 0; k < 8 && copied <= 0; k++)
    {
-      Sleep(100);
-      copied = CopyRates(sym, tf, 0, count, rates);
+      Sleep(50);
+      copied = CopyRates(sym, tf, start_pos, count, rates);
    }
    if(copied <= 0)
       return "{\"ok\":false,\"error_code\":4401,\"error\":\"Rates not found\"}";
 
    int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    int out_digits = (digits > 0 ? digits : 2);
+   long tz_offset = GetServerTzOffsetSec();
 
-   string j = "{\"ok\":true,\"rates\":[";
+   string j = "{\"ok\":true,\"tz_offset_sec\":" + IntegerToString(tz_offset) + ",\"rates\":[";
    for(int i = 0; i < copied; i++)
    {
       if(i > 0) j += ",";
@@ -327,11 +409,14 @@ void PopulateTradeRequest(MqlTradeRequest &req, const string &keys[], const stri
 {
    ZeroMemory(req);
    string sym = GetParam(keys, vals, n, "symbol", "");
-   EnsureSymbolSelected(sym);
+   if(StringLen(sym) > 0)
+      EnsureSymbolSelected(sym);
 
    req.action       = (ENUM_TRADE_REQUEST_ACTIONS)StringToInteger(GetParam(keys, vals, n, "action", "1"));
    req.magic        = (ulong)StringToInteger(GetParam(keys, vals, n, "magic", "234000"));
-   req.order        = (ulong)StringToInteger(GetParam(keys, vals, n, "order", "0"));
+   ulong order_ticket = (ulong)StringToInteger(GetParam(keys, vals, n, "order", "0"));
+   if(order_ticket > 0)
+      req.order     = order_ticket;
    req.symbol       = sym;
    req.volume       = StringToDouble(GetParam(keys, vals, n, "volume", "0"));
    req.price        = StringToDouble(GetParam(keys, vals, n, "price", "0"));
@@ -381,13 +466,20 @@ string HandleOrderSend(const string &keys[], const string &vals[], const int n)
    ZeroMemory(res);
    PopulateTradeRequest(req, keys, vals, n);
 
+   ulong order_ticket = (ulong)StringToInteger(GetParam(keys, vals, n, "order", "0"));
+   if(order_ticket > 0)
+      req.order = order_ticket;
+
    ResetLastError();
    bool ok = OrderSend(req, res);
    int err = GetLastError();
    if(!ok && res.retcode == 0)
       return "{\"ok\":false,\"error_code\":" + IntegerToString(err) + ",\"error\":\"OrderSend failed\"}";
 
-   int digits = (int)SymbolInfoInteger(req.symbol, SYMBOL_DIGITS);
+   if(res.retcode == 10008 || res.retcode == 10009 || res.retcode == 10010)
+      WriteHeartbeat();
+
+   int digits = (StringLen(req.symbol) > 0 ? (int)SymbolInfoInteger(req.symbol, SYMBOL_DIGITS) : 2);
    int out_digits = (digits > 0 ? digits : 2);
 
    string j = "{\"ok\":true,\"data\":{";
@@ -403,6 +495,24 @@ string HandleOrderSend(const string &keys[], const string &vals[], const int n)
    j += "\"retcode_external\":" + IntegerToString((long)res.retcode_external);
    j += "}}";
    return j;
+}
+
+//+------------------------------------------------------------------+
+//| Ordenacao lexicografica estrita (FIFO por timestamp no nome)     |
+//+------------------------------------------------------------------+
+void SortStringQueue(string &arr[], const int count)
+{
+   for(int i = 1; i < count; i++)
+   {
+      string cur = arr[i];
+      int j = i - 1;
+      while(j >= 0 && StringCompare(arr[j], cur, true) > 0)
+      {
+         arr[j + 1] = arr[j];
+         j--;
+      }
+      arr[j + 1] = cur;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -458,7 +568,7 @@ void ProcessRequestFile(const string base_name)
    string resp = "";
 
    if(cmd == "heartbeat" || cmd == "account")
-      resp = BuildAccountStatusJson();
+      resp = BuildAccountPayload();
    else if(cmd == "symbol_select")
    {
       bool sel = EnsureSymbolSelected(sym);
@@ -470,9 +580,11 @@ void ProcessRequestFile(const string base_name)
       resp = HandleTick(sym);
    else if(cmd == "rates")
    {
-      string tf = GetParam(keys, vals, n, "timeframe", "D1");
-      int cnt   = (int)StringToInteger(GetParam(keys, vals, n, "count", "120"));
-      resp = HandleRates(sym, tf, cnt);
+      string tf     = GetParam(keys, vals, n, "timeframe", "D1");
+      int start_pos = (int)StringToInteger(GetParam(keys, vals, n, "start_pos", "0"));
+      if(start_pos < 0) start_pos = 0;
+      int cnt       = (int)StringToInteger(GetParam(keys, vals, n, "count", "120"));
+      resp = HandleRates(sym, tf, start_pos, cnt);
    }
    else if(cmd == "positions")
    {
@@ -488,11 +600,12 @@ void ProcessRequestFile(const string base_name)
 
    string tmp_rel   = g_rpc_folder + "\\resp_" + req_id + ".tmp";
    string final_rel = g_rpc_folder + "\\resp_" + req_id + ".json";
-   WriteAtomicJson(final_rel, tmp_rel, resp);
+   if(!WriteAtomicJson(final_rel, tmp_rel, resp))
+      Print("[CortexBridgeEA] ERRO ao gravar resposta RPC: ", final_rel, " (err=", GetLastError(), ")");
 }
 
 //+------------------------------------------------------------------+
-//| Varre fila RPC a cada 25ms                                       |
+//| Varre fila RPC a cada 25ms em ordem FIFO                         |
 //+------------------------------------------------------------------+
 void PollRpcQueue()
 {
@@ -529,8 +642,14 @@ void PollRpcQueue()
       FileFindClose(sh);
    }
 
-   for(int i = 0; i < qcount; i++)
-      ProcessRequestFile(queue[i]);
+   if(qcount > 0)
+   {
+      ArrayResize(queue, qcount);
+      if(qcount > 1)
+         SortStringQueue(queue, qcount);
+      for(int i = 0; i < qcount; i++)
+         ProcessRequestFile(queue[i]);
+   }
 }
 
 //+------------------------------------------------------------------+

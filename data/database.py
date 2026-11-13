@@ -298,7 +298,7 @@ class DatabaseManager:
                 needs_init = (resolved_path not in _INITIALIZED_PATHS) or file_missing_or_empty
 
             if needs_init:
-                self._init_database()
+                self._initialize_schema()
                 with _INIT_GUARD:
                     _INITIALIZED_PATHS.add(resolved_path)
 
@@ -333,10 +333,11 @@ class DatabaseManager:
                 return True
         return False
 
-    def _init_database(self) -> None:
-        """Cria tabelas, executa migrações idempotentes e aplica seed inicial único."""
+    def _initialize_schema(self) -> None:
+        """Cria tabelas, ativa WAL persistente, executa migrações idempotentes e aplica seed inicial único."""
         try:
             with self._get_connection() as conn:
+                conn.execute("PRAGMA journal_mode=WAL;")
                 conn.executescript(_CREATE_TABLES_SQL)
                 cursor = conn.cursor()
 
@@ -494,10 +495,12 @@ class DatabaseManager:
             logger.critical("Falha ao inicializar banco de dados: %s", exc)
             raise
 
+    _init_database = _initialize_schema
+
     @contextmanager
     def _get_connection(self) -> Generator[sqlite3.Connection, None, None]:
         """
-        Context manager para conexão com o banco de dados SQLite em modo WAL.
+        Context manager para conexão leve com o banco de dados SQLite (WAL já ativado no schema).
         """
         conn = sqlite3.connect(
             str(self.db_path),
@@ -505,10 +508,9 @@ class DatabaseManager:
             detect_types=sqlite3.PARSE_DECLTYPES,
         )
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=30000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA foreign_keys=ON;")
+        conn.execute("PRAGMA busy_timeout=5000;")
         try:
             yield conn
             conn.commit()
@@ -1287,6 +1289,8 @@ class DatabaseManager:
                     "telegram_logs",
                     "system_health",
                     "news_items",
+                    "capital_transactions",
+                    "withdrawal_goals",
                 ]
                 for table in tables:
                     conn.execute(f"DELETE FROM {table};")
@@ -1311,6 +1315,8 @@ class DatabaseManager:
         stats = {
             "ai_decisions_hold": 0,
             "news_items": 0,
+            "sentiment_scores": 0,
+            "telegram_logs": 0,
             "system_health": 0,
             "market_snapshots": 0,
             "expired_sessions": 0,
@@ -1332,6 +1338,18 @@ class DatabaseManager:
                     (news_cutoff,),
                 )
                 stats["news_items"] = max(0, cur.rowcount)
+
+                cur = conn.execute(
+                    "DELETE FROM sentiment_scores WHERE timestamp < ?",
+                    (news_cutoff,),
+                )
+                stats["sentiment_scores"] = max(0, cur.rowcount)
+
+                cur = conn.execute(
+                    "DELETE FROM telegram_logs WHERE sent_at < ?",
+                    (health_cutoff,),
+                )
+                stats["telegram_logs"] = max(0, cur.rowcount)
 
                 cur = conn.execute(
                     "DELETE FROM system_health WHERE timestamp < ?",
@@ -1364,8 +1382,10 @@ class DatabaseManager:
         reference_date: Any = None,
     ) -> dict[str, Any]:
         """
-        Calcula o financeiro de vendas reais na B3 ainda em liquidação física/financeira (D+2 dias úteis),
-        permitindo distinguir caixa livre p/ novas compras de saldo efetivamente sacável via PIX/TED.
+        Calcula o financeiro líquido de vendas reais na B3 ainda em liquidação física/financeira
+        (D+2 dias úteis) aplicando compensação multilateral diária (Vendas Líquidas - Compras Brutas
+        no mesmo pregão T), permitindo distinguir caixa livre p/ novas compras de saldo efetivamente
+        sacável via PIX/TED.
         """
         from config.settings import settings
 
@@ -1384,20 +1404,18 @@ class DatabaseManager:
 
         rows = self._fetch_all(
             """
-            SELECT timestamp, total_value, price, quantity
+            SELECT timestamp, action, total_value, price, quantity
             FROM trades
             WHERE is_simulated = 0
-              AND action IN ('SELL', 'VENDA')
+              AND action IN ('SELL', 'VENDA', 'VENDA_EMERGENCIAL', 'EMERGENCY_SELL', 'BUY', 'COMPRA')
               AND timestamp >= ?
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC, id ASC
             """,
             (lookback_iso,),
         )
 
         fee_rate = max(0.0, float(getattr(settings, "B3_FEE_RATE", 0.0003) or 0.0))
-        unsettled = 0.0
-        pending_count = 0
-        earliest_settlement: Any = None
+        daily_buckets: dict[Any, dict[str, Any]] = {}
 
         for row in rows:
             raw_ts = str(row.get("timestamp") or "").strip()
@@ -1410,17 +1428,45 @@ class DatabaseManager:
                 continue
 
             settlement_date = scheduler.add_business_days(trade_date, 2)
-            if settlement_date > today:
-                gross_val = float(
-                    row.get("total_value")
-                    or (float(row.get("price") or 0.0) * int(row.get("quantity") or 0))
-                )
-                if gross_val > 0:
-                    net_val = gross_val * (1.0 - fee_rate)
-                    unsettled += net_val
-                    pending_count += 1
-                    if earliest_settlement is None or settlement_date < earliest_settlement:
-                        earliest_settlement = settlement_date
+            if settlement_date <= today:
+                continue
+
+            gross_val = float(
+                row.get("total_value")
+                or (float(row.get("price") or 0.0) * int(row.get("quantity") or 0))
+            )
+            if gross_val <= 0:
+                continue
+
+            bucket = daily_buckets.setdefault(
+                trade_date,
+                {
+                    "settlement_date": settlement_date,
+                    "sells_net": 0.0,
+                    "buys_gross": 0.0,
+                    "sell_count": 0,
+                },
+            )
+            act_upper = str(row.get("action") or "").strip().upper()
+            if act_upper in ("SELL", "VENDA", "VENDA_EMERGENCIAL", "EMERGENCY_SELL"):
+                bucket["sells_net"] += gross_val * (1.0 - fee_rate)
+                bucket["sell_count"] += 1
+            elif act_upper in ("BUY", "COMPRA"):
+                bucket["buys_gross"] += gross_val
+
+        unsettled = 0.0
+        pending_count = 0
+        earliest_settlement: Any = None
+
+        for trade_date in sorted(daily_buckets.keys()):
+            bucket = daily_buckets[trade_date]
+            daily_net_sell = max(0.0, float(bucket["sells_net"]) - float(bucket["buys_gross"]))
+            if daily_net_sell > 0.0:
+                unsettled += daily_net_sell
+                pending_count += int(bucket["sell_count"])
+                settlement_date = bucket["settlement_date"]
+                if earliest_settlement is None or settlement_date < earliest_settlement:
+                    earliest_settlement = settlement_date
 
         return {
             "unsettled_d2_cash": round(unsettled, 2),

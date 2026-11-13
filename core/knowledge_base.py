@@ -41,7 +41,7 @@ GLOSSARY_DATABASE: List[Dict[str, Any]] = [
         "category": "Risco & Proteção",
         "term": "Take-Profit Parcial (+15%)",
         "short_def": "Realização automática de metade da posição ao atingir +15% de lucro.",
-        "details": "Para posições com 2 ou mais ações que atingem +15,0% de valorização, o Córtex realiza 50% do volume no bolso e eleva o Stop-Loss do lote remanescente para pelo menos o preço de entrada (breakeven), sem jamais reduzir um Trailing Stop já superior."
+        "details": "Para posições com 2 ou mais ações que atingem +15,0% de valorização, o Córtex realiza ~50% do volume respeitando a granularidade de lotes da B3 e eleva o Stop-Loss do lote remanescente para pelo menos o breakeven líquido de emolumentos da B3 (B3_FEE_RATE), sem jamais reduzir um Trailing Stop já superior. Quando AVOID_DAY_TRADE_TAX=True, posições abertas no mesmo dia (D+0) têm o stop blindado no breakeven líquido imediatamente e aguardam D+1 para realizar a venda parcial com isenção de Swing-Trade PF."
     },
     {
         "id": "teto-capital",
@@ -76,7 +76,7 @@ GLOSSARY_DATABASE: List[Dict[str, Any]] = [
         "category": "Gestão de Capital",
         "term": "Foco de Saque (Instantâneo vs Meta de Lucro)",
         "short_def": "Ferramenta exclusiva da Produção para transferir lucros ao Cofre Reserva.",
-        "details": "1. **Retirar AGORA (Instantâneo):** Usa caixa livre desbloqueado ou liquida posições lucrativas e transfere o valor ao Cofre Reserva.\n2. **Retirar por Meta de Lucro:** Monitora o patrimônio operacional em Produção e, ao atingir o alvo, executa o saque inteligente automaticamente."
+        "details": "1. **Retirar AGORA (Instantâneo):** Usa caixa livre desbloqueado ou liquida posições lucrativas e transfere o valor ao Cofre Reserva (respeitando liquidação financeira D+2 da B3 para valores oriundos de vendas).\n2. **Retirar por Meta de Lucro:** Monitora exclusivamente o patrimônio operacional da IA (operational_value, sem contar o Cofre Reserva) em Produção e, ao atingir o alvo, executa o saque inteligente automaticamente priorizando posições D+1+ quando AVOID_DAY_TRADE_TAX=True."
     },
     {
         "id": "homologacao-vs-producao",
@@ -164,11 +164,24 @@ class AssistantKnowledgeBase:
             return {
                 "answer": (
                     "🎯 **Take-Profit Parcial (+15%):**\n\n"
-                    "• Quando uma posição com **2 ou mais ações** alcança **`+15,0%`** de lucro, o Córtex vende automaticamente metade das ações.\n"
-                    "• O Stop-Loss da metade restante é elevado para `max(stop_atual, preço_de_entrada)` (nunca reduzindo um Trailing Stop já mais alto).\n"
-                    "• Posições de apenas **1 ação** não sofrem saída parcial para não encerrar 100% da posição prematuramente, permanecendo protegidas pelo Trailing Stop."
+                    "• Quando uma posição com **2 ou mais ações** alcança **`+15,0%`** de lucro, o Córtex realiza aproximadamente metade da posição (respeitando lotes padrão `100x` e fracionários na B3 em Produção).\n"
+                    "• O Stop-Loss da parcela restante é blindado no **breakeven líquido de taxas da B3** (`B3_FEE_RATE`), usando `max(stop_atual, breakeven_líquido)` sem jamais reduzir um Trailing Stop já superior.\n"
+                    "• **Escudo Tributário PF (`AVOID_DAY_TRADE_TAX=True`):** Se a posição foi aberta hoje (`D+0`), o Córtex protege imediatamente o Stop-Loss no breakeven líquido e retém a venda parcial até `D+1` para preservar a isenção de Swing-Trade.\n"
+                    "• Posições de apenas **1 ação** (ou exatamente 1 lote padrão de 100 ações indivisível em Produção) mantêm o Stop-Loss blindado no breakeven líquido e seguem protegidas pelo Trailing Stop."
                 ),
                 "suggestions": ["Como funciona o Trailing Stop?", "O que é Stop Loss Inicial?", "Comandos do Telegram"]
+            }
+
+        if _matches_any(q, ["circuit breaker", "perda diária", "perda diaria", "limite diário", "limite diario", "trava diária", "trava diaria"]):
+            return {
+                "answer": (
+                    "🛑 **Circuit Breaker Diário:**\n\n"
+                    "Trava automática de proteção patrimonial isolada por ambiente (Homologação e Produção):\n\n"
+                    "• **Gatilho:** Acionado quando a variação diária do patrimônio operacional (`operational_value` na Produção) atinge o limite máximo de perda diária (padrão: **`-3,0%`**).\n"
+                    "• **Efeito:** Bloqueia imediatamente todas as **novas compras** naquele ambiente até o próximo pregão, evitando operar contra um dia adverso.\n"
+                    "• **Proteção Mantida:** O monitoramento de **Stop-Loss** e **Trailing Stop** das posições já abertas continua 100% ativo, e transferências manuais entre IA e Cofre não disparam falso Circuit Breaker."
+                ),
+                "suggestions": ["O que é Stop Loss Inicial?", "Como funciona o Trailing Stop?", "O que é Teto de Capital?"]
             }
 
         if _matches_any(q, ["stop loss", "stop-loss", "stop inicial", "limite de perda", "atr"]):
@@ -183,13 +196,38 @@ class AssistantKnowledgeBase:
                 "suggestions": ["Como funciona o Trailing Stop?", "O que é Circuit Breaker?", "O que é o Cofre Reserva?"]
             }
 
+        if _matches_any(q, ["liquidação inteligente", "liquidacao inteligente", "liquidação fracionária", "liquidacao fracionaria"]):
+            return {
+                "answer": (
+                    "🧮 **Liquidação Inteligente Fracionária:**\n\n"
+                    "Quando o caixa livre desbloqueado não é suficiente para um **Saque** ou **Redução de Teto da IA**, o algoritmo seleciona cirurgicamente o que vender:\n\n"
+                    "1. **Prioridade por Lucro e Swing-Trade (`D+1`):** Ordena as posições priorizando aquelas abertas em dias anteriores (`D+1+` quando `AVOID_DAY_TRADE_TAX=True`) e com **maior ganho percentual**.\n"
+                    "2. **Volume Mínimo Necessário:** Desconta emolumentos da B3 (`B3_FEE_RATE`) e respeita a granularidade de lotes padrão (`100x`) e fracionários na Produção.\n"
+                    "3. **Liquidação B3 (`D+2`):** O valor vendido entra imediatamente na proteção contábil do Cofre Reserva, ficando disponível para transferência bancária após a liquidação financeira `D+2` da B3."
+                ),
+                "suggestions": ["Como funciona o Foco de Saque?", "O que é Teto de Capital?", "O que é o Cofre Reserva?"]
+            }
+
+        if _matches_any(q, ["teto de capital", "teto operacional", "teto da ia", "capital alocado", "alocação de capital", "alocacao de capital"]):
+            return {
+                "answer": (
+                    "🤖 **Teto de Capital Operacional da IA:**\n\n"
+                    "Define o valor máximo do patrimônio em **Produção** que o Córtex IA está autorizado a operar:\n\n"
+                    "• **Limite Rígido de Exposição:** O Poder de Compra desconta o custo das posições abertas do Teto da IA, nunca ultrapassando o valor autorizado.\n"
+                    "• **Excedente Blindado:** Todo caixa da corretora acima do Teto Operacional fica automaticamente protegido no **Cofre Reserva**.\n"
+                    "• **Ajuste Dinâmico:** Ao reduzir o teto abaixo do valor investido, o sistema executa a **Liquidação Inteligente** apenas do excedente; ao realizar lucros em vendas, o **Auto-Compounding** atualiza o teto líquido de taxas B3."
+                ),
+                "suggestions": ["O que é o Cofre Reserva?", "O que é Auto-compounding?", "O que é Liquidação Inteligente?"]
+            }
+
         if _matches_any(q, ["saque", "retirar", "resgate", "meta de lucro", "foco"]):
             return {
                 "answer": (
                     "💰 **Foco de Saque Automático (Exclusivo da Produção):**\n\n"
                     "Você pode transferir recursos para o **Cofre Reserva** de duas maneiras:\n\n"
-                    "1. **⚡ Retirar AGORA (Instantâneo):** Utiliza o caixa livre desbloqueado; se necessário, vende parcialmente as posições mais lucrativas e transfere o valor ao Cofre.\n"
-                    "2. **📈 Retirar por Meta de Lucro:** Monitora o patrimônio operacional na Produção e, ao atingir a meta definida, executa a liquidação inteligente e protege o lucro no Cofre.\n\n"
+                    "1. **⚡ Retirar AGORA (Instantâneo):** Utiliza o caixa livre desbloqueado; se necessário, aciona a Liquidação Inteligente nas posições mais lucrativas (priorizando `D+1+` com `AVOID_DAY_TRADE_TAX=True`) e blinda o valor no Cofre.\n"
+                    "2. **📈 Retirar por Meta de Lucro:** Monitora o **Patrimônio Operacional da IA (`operational_value`)** na Produção (isolado do saldo já guardado no Cofre) e, ao atingir a meta definida, executa o saque inteligente automaticamente.\n"
+                    "3. **⏳ Liquidação `D+2` B3:** Recursos provenientes da venda de ações ficam blindados no Cofre imediatamente e tornam-se sacáveis na corretora em **`D+2` dias úteis**.\n\n"
                     "🔒 *Em modo Homologação, saques reais ficam bloqueados para total isolamento de ambiente.*"
                 ),
                 "suggestions": ["O que é o Cofre Reserva?", "O que é Liquidação Inteligente?", "Qual a diferença de Homologação e Produção?"]
@@ -251,16 +289,57 @@ class AssistantKnowledgeBase:
                 "suggestions": ["O que são Indicadores Técnicos?", "O que é Sentimento NLP?", "Como funciona o Trailing Stop?"]
             }
 
-        if _matches_any(q, ["sentimento", "notícia", "noticia", "nlp", "finbert", "ia", "cérebro", "cerebro", "inteligência", "inteligencia"]):
+        if _matches_any(
+            q,
+            [
+                "indicadores técnicos",
+                "indicadores tecnicos",
+                "convergência técnica",
+                "convergencia tecnica",
+                "análise técnica",
+                "analise tecnica",
+                "ema",
+                "rsi",
+                "macd",
+                "bollinger",
+            ],
+        ):
             return {
                 "answer": (
-                    "🧠 **Cérebro IA & Análise de Notícias (FinBERT):**\n\n"
+                    "📊 **Indicadores Técnicos & Convergência Quantitativa:**\n\n"
+                    "O Córtex IA avalia múltiplos indicadores técnicos em conjunto antes de autorizar qualquer operação:\n\n"
+                    "• **Tendência:** Médias Móveis Exponenciais (**EMA 9, 21 e 50**) e confirmação **Multi-Timeframe (`60m` + `1d`)**.\n"
+                    "• **Momentum:** **RSI (14)** e histograma/cruzamento **MACD**.\n"
+                    "• **Volatilidade & Níveis:** **Bandas de Bollinger**, **ATR (14)** para dimensionamento adaptativo de Stop-Loss, além de **Suporte/Resistência** e **Volume Relativo**.\n"
+                    "• **Filtro Sistêmico:** Monitora o regime de mercado via **BOVA11** e bloqueia entradas durante o leilão/estabilização de abertura."
+                ),
+                "suggestions": ["O que é Sentimento NLP?", "Como funciona o Stop-Loss?", "Como funciona o Trailing Stop?"]
+            }
+
+        if _matches_any(
+            q,
+            [
+                "cérebro ia",
+                "cerebro ia",
+                "inteligência artificial",
+                "inteligencia artificial",
+                "finbert",
+                "sentimento",
+                "nlp",
+                "gemini",
+                "notícia",
+                "noticia",
+            ],
+        ):
+            return {
+                "answer": (
+                    "🧠 **Cérebro IA & Análise de Notícias (FinBERT / Gemini):**\n\n"
                     "O Córtex combina **Análise Técnica Quantitativa** com **Processamento de Linguagem Natural**:\n\n"
                     "1. **Coleta de Notícias:** Monitora manchetes de InfoMoney, Valor Econômico e Google News.\n"
-                    "2. **Score de Sentimento (`-1.0` a `+1.0`):** Classifica o noticiário corporativo de cada ticker.\n"
+                    "2. **Score de Sentimento (`-1.0` a `+1.0`):** Classifica o noticiário corporativo de cada ticker via FinBERT / NLP.\n"
                     "3. **Convergência:** Novas compras exigem alinhamento técnico altista e ausência de sentimento hostil."
                 ),
-                "suggestions": ["Como funciona o Stop-Loss?", "O que é Trailing Stop?", "Comandos do Telegram"]
+                "suggestions": ["O que são Indicadores Técnicos?", "Como funciona o Stop-Loss?", "Comandos do Telegram"]
             }
 
         return {

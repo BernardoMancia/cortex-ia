@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import logging
+import math
 import threading
 from typing import Any, Optional
 
@@ -23,11 +24,19 @@ logger = logging.getLogger('cortex.portfolio')
 class Portfolio:
     """Carteira thread-safe com suporte a teto operacional da IA e Cofre Reserva."""
 
-    def __init__(self, initial_capital: float | None = None) -> None:
+    def __init__(
+        self,
+        initial_capital: float | None = None,
+        is_simulated: bool | None = None,
+    ) -> None:
         resolved_capital = float(
             settings.CAPITAL_INICIAL if initial_capital is None else initial_capital
         )
+        if not math.isfinite(resolved_capital) or resolved_capital < 0:
+            resolved_capital = 0.0
         self._lock = threading.RLock()
+        self._is_simulated: bool | None = is_simulated
+        self._manual_capital_delta_accum: float = 0.0
         self.initial_capital: float = resolved_capital
         self.free_cash: float = resolved_capital
         self.ai_allocated_capital: float = resolved_capital
@@ -35,6 +44,15 @@ class Portfolio:
         self.cumulative_realized_pnl: float = 0.0
         self._positions: list[Position] = []
         logger.info('Portfolio inicializado — capital: R$ %.2f', resolved_capital)
+
+    def set_free_cash(self, amount: float) -> None:
+        """Define o caixa livre de forma thread-safe truncando valores inválidos/negativos."""
+        with self._lock:
+            try:
+                val = float(amount)
+            except (TypeError, ValueError):
+                val = 0.0
+            self.free_cash = max(0.0, val) if math.isfinite(val) else 0.0
 
     @staticmethod
     def _normalize_ticker(ticker: str) -> str:
@@ -82,9 +100,7 @@ class Portfolio:
         para evitar distorção artificial de P&L pelo saldo parado no cofre.
         """
         with self._lock:
-            if self.vault_reserve_cash > 0:
-                return (self.total_value - self.vault_reserve_cash) - self.initial_capital
-            return self.total_value - self.initial_capital
+            return self.operational_value - self.initial_capital
 
     @property
     def total_pnl_percent(self) -> float:
@@ -110,7 +126,7 @@ class Portfolio:
             remaining_ceiling = max(0.0, self.ai_allocated_capital - self.allocated_capital)
             return min(usable_cash, remaining_ceiling)
 
-    def add_position(self, position: Position) -> None:
+    def add_position(self, position: Position, fee: float = 0.0) -> None:
         """Adiciona ou mescla uma posição na carteira de forma atômica."""
         if position.quantity <= 0 or position.entry_price <= 0:
             logger.warning(
@@ -119,6 +135,7 @@ class Portfolio:
             )
             return
 
+        resolved_fee = max(0.0, float(fee)) if (fee is not None and math.isfinite(float(fee))) else 0.0
         norm = self._normalize_ticker(position.ticker)
         cost = position.quantity * position.entry_price
 
@@ -134,7 +151,10 @@ class Portfolio:
                         pos.current_price = position.current_price
                     if position.stop_loss and position.stop_loss > 0:
                         pos.stop_loss = max(pos.stop_loss, position.stop_loss)
-                    self.free_cash -= cost
+                    self.free_cash -= (cost + resolved_fee)
+                    if resolved_fee > 0:
+                        self.cumulative_realized_pnl -= resolved_fee
+                        self.ai_allocated_capital = max(0.0, self.ai_allocated_capital - resolved_fee)
                     if self.free_cash < -1e-6:
                         logger.warning(
                             'Caixa livre ficou negativo ao mesclar %s (R$ %.2f) — truncando para R$ 0.00',
@@ -149,7 +169,10 @@ class Portfolio:
 
             new_pos = replace(position)
             self._positions.append(new_pos)
-            self.free_cash -= cost
+            self.free_cash -= (cost + resolved_fee)
+            if resolved_fee > 0:
+                self.cumulative_realized_pnl -= resolved_fee
+                self.ai_allocated_capital = max(0.0, self.ai_allocated_capital - resolved_fee)
             if self.free_cash < -1e-6:
                 logger.warning(
                     'Caixa livre ficou negativo ao adicionar %s (R$ %.2f) — truncando para R$ 0.00',
@@ -180,16 +203,17 @@ class Portfolio:
                     return replace(pos)
         return None
 
-    def remove_position(self, ticker: str, sell_price: float) -> Optional[Position]:
+    def remove_position(self, ticker: str, sell_price: float, fee: float = 0.0) -> Optional[Position]:
         """Remove integralmente uma posição e incorpora o resultado realizado (auto-compounding)."""
+        resolved_fee = max(0.0, float(fee)) if (fee is not None and math.isfinite(float(fee))) else 0.0
         norm = self._normalize_ticker(ticker)
         with self._lock:
             for i, pos in enumerate(self._positions):
                 if self._normalize_ticker(pos.ticker) == norm:
                     removed = self._positions.pop(i)
-                    revenue = sell_price * removed.quantity
-                    pnl = (sell_price - removed.entry_price) * removed.quantity
-                    self.free_cash += revenue
+                    revenue = (sell_price * removed.quantity) - resolved_fee
+                    pnl = ((sell_price - removed.entry_price) * removed.quantity) - resolved_fee
+                    self.free_cash = max(0.0, self.free_cash + revenue)
                     self.cumulative_realized_pnl += pnl
                     self.ai_allocated_capital = max(0.0, self.ai_allocated_capital + pnl)
                     logger.info(
@@ -199,8 +223,15 @@ class Portfolio:
                     return replace(removed)
         return None
 
-    def reduce_position(self, ticker: str, sell_price: float, quantity_to_sell: int) -> Optional[Position]:
+    def reduce_position(
+        self,
+        ticker: str,
+        sell_price: float,
+        quantity_to_sell: int,
+        fee: float = 0.0,
+    ) -> Optional[Position]:
         """Reduz parcialmente uma posição e incorpora o lucro/prejuízo proporcional."""
+        resolved_fee = max(0.0, float(fee)) if (fee is not None and math.isfinite(float(fee))) else 0.0
         norm = self._normalize_ticker(ticker)
         with self._lock:
             if quantity_to_sell <= 0:
@@ -208,12 +239,12 @@ class Portfolio:
             for pos in self._positions:
                 if self._normalize_ticker(pos.ticker) == norm:
                     if quantity_to_sell >= pos.quantity:
-                        return self.remove_position(ticker, sell_price)
+                        return self.remove_position(ticker, sell_price, fee=resolved_fee)
 
                     pos.quantity -= quantity_to_sell
-                    revenue = sell_price * quantity_to_sell
-                    pnl = (sell_price - pos.entry_price) * quantity_to_sell
-                    self.free_cash += revenue
+                    revenue = (sell_price * quantity_to_sell) - resolved_fee
+                    pnl = ((sell_price - pos.entry_price) * quantity_to_sell) - resolved_fee
+                    self.free_cash = max(0.0, self.free_cash + revenue)
                     self.cumulative_realized_pnl += pnl
                     self.ai_allocated_capital = max(0.0, self.ai_allocated_capital + pnl)
 
@@ -224,40 +255,81 @@ class Portfolio:
                     return replace(pos)
         return None
 
+    def _rebalance_baseline_after_capital_change(
+        self,
+        prev_op_eq: float,
+        prev_initial: float,
+        track_manual_delta: bool = True,
+    ) -> None:
+        """
+        Ajusta `initial_capital` e `cumulative_realized_pnl` proporcionalmente em saques/reduções
+        para impedir colapso de `initial_capital` a `0.0` quando `operational_value > 0`, mantendo
+        `total_pnl == operational_value - initial_capital`.
+        """
+        unrealized_pnl = sum(p.pnl for p in self._positions)
+        current_pnl = self.cumulative_realized_pnl + unrealized_pnl
+        operational_eq = max(0.0, self.total_value - self.vault_reserve_cash)
+
+        if track_manual_delta:
+            self._manual_capital_delta_accum += (operational_eq - prev_op_eq)
+
+        if operational_eq <= 0.0:
+            self.initial_capital = 0.0
+            self.cumulative_realized_pnl = -unrealized_pnl
+            return
+
+        if operational_eq < prev_op_eq - 1e-9 and prev_op_eq > 0.0:
+            eff_prev_initial = prev_initial if prev_initial > 0.0 else max(0.01, prev_op_eq - current_pnl)
+            if eff_prev_initial <= 0.0:
+                eff_prev_initial = prev_op_eq
+            retain_ratio = operational_eq / prev_op_eq
+            new_initial = max(0.01, eff_prev_initial * retain_ratio)
+            self.initial_capital = new_initial
+            target_pnl = operational_eq - new_initial
+            self.cumulative_realized_pnl = target_pnl - unrealized_pnl
+        else:
+            candidate_initial = operational_eq - current_pnl
+            if candidate_initial <= 0.0:
+                fallback_base = prev_initial if prev_initial > 0.0 else operational_eq
+                self.initial_capital = max(0.01, min(operational_eq, fallback_base))
+                self.cumulative_realized_pnl = (operational_eq - self.initial_capital) - unrealized_pnl
+            else:
+                self.initial_capital = candidate_initial
+
     def adjust_ai_capital(self, new_ai_capital: float) -> None:
         """Ajusta o teto operacional da IA e recalcula o Cofre Reserva mantendo o P&L real."""
         with self._lock:
-            current_pnl = self.cumulative_realized_pnl + sum(p.pnl for p in self._positions)
+            prev_op_eq = max(0.0, self.total_value - self.vault_reserve_cash)
+            prev_initial = self.initial_capital
             self.ai_allocated_capital = max(0.0, float(new_ai_capital))
             cost_basis_equity = self.free_cash + self.allocated_capital
             self.vault_reserve_cash = min(
                 self.free_cash,
                 max(0.0, cost_basis_equity - self.ai_allocated_capital),
             )
-            operational_eq = max(0.0, self.total_value - self.vault_reserve_cash)
-            self.initial_capital = max(0.0, operational_eq - current_pnl)
+            self._rebalance_baseline_after_capital_change(prev_op_eq, prev_initial, track_manual_delta=True)
 
     def deposit_to_vault(self, amount: float) -> float:
         """Transfere caixa livre desbloqueado para o Cofre Reserva protegido."""
         with self._lock:
-            current_pnl = self.cumulative_realized_pnl + sum(p.pnl for p in self._positions)
+            prev_op_eq = max(0.0, self.total_value - self.vault_reserve_cash)
+            prev_initial = self.initial_capital
             avail = max(0.0, self.free_cash - self.vault_reserve_cash)
             transfer_amount = min(avail, max(0.0, float(amount)))
             self.vault_reserve_cash += transfer_amount
             self.ai_allocated_capital = max(0.0, self.ai_allocated_capital - transfer_amount)
-            operational_eq = max(0.0, self.total_value - self.vault_reserve_cash)
-            self.initial_capital = max(0.0, operational_eq - current_pnl)
+            self._rebalance_baseline_after_capital_change(prev_op_eq, prev_initial, track_manual_delta=True)
             return transfer_amount
 
     def release_from_vault(self, amount: float) -> float:
         """Libera recursos do Cofre Reserva de volta para o teto operacional da IA."""
         with self._lock:
-            current_pnl = self.cumulative_realized_pnl + sum(p.pnl for p in self._positions)
+            prev_op_eq = max(0.0, self.total_value - self.vault_reserve_cash)
+            prev_initial = self.initial_capital
             release_amount = min(self.vault_reserve_cash, max(0.0, float(amount)))
             self.vault_reserve_cash -= release_amount
             self.ai_allocated_capital += release_amount
-            operational_eq = max(0.0, self.total_value - self.vault_reserve_cash)
-            self.initial_capital = max(0.0, operational_eq - current_pnl)
+            self._rebalance_baseline_after_capital_change(prev_op_eq, prev_initial, track_manual_delta=True)
             return release_amount
 
     def update_prices(self, prices: dict[str, Optional[float]]) -> None:
@@ -281,6 +353,9 @@ class Portfolio:
     def get_summary(self) -> PortfolioSummary:
         """Retorna snapshot consolidado da carteira."""
         with self._lock:
+            sim_mode = bool(
+                self._is_simulated if self._is_simulated is not None else settings.SIMULATION_MODE
+            )
             return PortfolioSummary(
                 total_value=self.total_value,
                 free_cash=self.free_cash,
@@ -289,7 +364,7 @@ class Portfolio:
                 total_pnl=self.total_pnl,
                 total_pnl_percent=self.total_pnl_percent,
                 num_positions=len(self._positions),
-                simulation_mode=bool(settings.SIMULATION_MODE),
+                simulation_mode=sim_mode,
             )
 
     def get_capital_summary(self) -> dict[str, Any]:

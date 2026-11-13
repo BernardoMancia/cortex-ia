@@ -24,6 +24,7 @@ from typing import Any, Optional
 from xml.etree import ElementTree
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from config.settings import settings
 from utils.helpers import BRT, normalize_b3_ticker
@@ -497,13 +498,31 @@ class NewsScraper:
         self._thread_local = threading.local()
         self._sessions_lock: threading.Lock = threading.Lock()
         self._sessions: list[requests.Session] = []
+        self._executor_lock: threading.Lock = threading.Lock()
+        self._executor: Optional[ThreadPoolExecutor] = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="cortex-news",
+        )
         logger.info("NewsScraper inicializado — timeout: %ds", self._timeout)
 
+    def _get_executor(self) -> ThreadPoolExecutor:
+        """Retorna o ThreadPoolExecutor persistente, recriando-o caso close() tenha sido chamado."""
+        with self._executor_lock:
+            if self._executor is None or getattr(self._executor, "_shutdown", False):
+                self._executor = ThreadPoolExecutor(
+                    max_workers=4,
+                    thread_name_prefix="cortex-news",
+                )
+            return self._executor
+
     def _get_session(self) -> requests.Session:
-        """Retorna um `requests.Session` isolado por thread."""
+        """Retorna um `requests.Session` isolado por thread com pool limitado."""
         sess = getattr(self._thread_local, "session", None)
         if sess is None:
             sess = requests.Session()
+            adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4)
+            sess.mount("http://", adapter)
+            sess.mount("https://", adapter)
             self._thread_local.session = sess
             with self._sessions_lock:
                 self._sessions.append(sess)
@@ -529,6 +548,7 @@ class NewsScraper:
         headers = {
             "User-Agent": _random_user_agent(),
             "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+            "Connection": "close",
         }
         session = self._get_session()
 
@@ -757,16 +777,16 @@ class NewsScraper:
         ]
 
         scraped_items: list[NewsItem] = []
-        with ThreadPoolExecutor(max_workers=len(fetchers)) as executor:
-            future_to_source = {executor.submit(fn): name for name, fn in fetchers}
-            for future in as_completed(future_to_source):
-                src_name = future_to_source[future]
-                try:
-                    items = future.result()
-                    if items:
-                        scraped_items.extend(items)
-                except Exception as exc:
-                    logger.warning("Falha ao coletar notícias de %s: %s", src_name, exc)
+        executor = self._get_executor()
+        future_to_source = {executor.submit(fn): name for name, fn in fetchers}
+        for future in as_completed(future_to_source):
+            src_name = future_to_source[future]
+            try:
+                items = future.result()
+                if items:
+                    scraped_items.extend(items)
+            except Exception as exc:
+                logger.warning("Falha ao coletar notícias de %s: %s", src_name, exc)
 
         cached_recent = self._merge_and_prune_cache(scraped_items)
 
@@ -815,7 +835,16 @@ class NewsScraper:
         return filtered
 
     def close(self) -> None:
-        """Fecha todas as sessões HTTP criadas pelas threads."""
+        """Encerra o pool persistente e fecha todas as sessões HTTP criadas pelas threads."""
+        with self._executor_lock:
+            executor = self._executor
+            self._executor = None
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception as exc:
+                logger.debug("Erro ao encerrar executor do NewsScraper: %s", exc)
+
         with self._sessions_lock:
             sessions = list(self._sessions)
             self._sessions.clear()
@@ -825,7 +854,7 @@ class NewsScraper:
             except Exception as exc:
                 logger.debug("Erro ao fechar sessão HTTP: %s", exc)
         self._thread_local = threading.local()
-        logger.debug("Sessões HTTP do NewsScraper encerradas")
+        logger.debug("Executor e sessões HTTP do NewsScraper encerrados")
 
     def __repr__(self) -> str:
         with self._cache_lock:

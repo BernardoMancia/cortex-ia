@@ -34,6 +34,7 @@ from auth import (
     get_current_user_interactive,
     is_origin_allowed,
     rate_limiter,
+    require_authenticated_request,
 )
 from broker.simulator import SimulatorBroker
 from config.settings import settings
@@ -47,6 +48,16 @@ router = APIRouter()
 
 def _get_simulator_state_path() -> str:
     return str(settings.simulator_state_path)
+
+
+def _reload_dynamic_config_for_request(request: Request, db: DatabaseManager) -> None:
+    """Recarrega parâmetros dinâmicos preservando SIMULATION_MODE quando o motor está em execução."""
+    dashboard_state = getattr(request.app.state, "dashboard_state", None)
+    has_engine = getattr(dashboard_state, "_engine", None) is not None
+    try:
+        settings.reload_dynamic_config(db=db, reload_environment=(not has_engine))
+    except TypeError:
+        settings.reload_dynamic_config(db=db)
 
 
 def _read_simulator_state() -> dict[str, Any]:
@@ -343,13 +354,8 @@ def auth_first_login(req: FirstLoginRequest, request: Request, response: Respons
 
 @router.post("/api/auth/logout")
 def auth_logout(request: Request, response: Response):
-    origin_hdr = request.headers.get("Origin", "")
-    if origin_hdr and not is_origin_allowed(origin_hdr, request.headers.get("host", "")):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Origem não autorizada.",
-        )
-    token = extract_session_token(request)
+    user = require_authenticated_request(request, enforce_csrf=True)
+    token = user.get("session_token") or extract_session_token(request)
     if token:
         db = DatabaseManager()
         db.revoke_session(token)
@@ -381,7 +387,7 @@ def get_status(
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     is_sim = settings.SIMULATION_MODE
     curr_env = "homologation" if is_sim else "production"
 
@@ -492,17 +498,20 @@ def get_status(
 
 @router.get("/api/decisions")
 def get_decisions(
+    request: Request,
     limit: int = 50,
     environment: Optional[str] = None,
     _user: dict[str, Any] = Depends(get_current_user),
 ):
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     env = (
         environment.strip().lower()
         if environment
         else ("homologation" if settings.SIMULATION_MODE else "production")
     )
+    if env == "simulation":
+        env = "homologation"
     if env not in ("homologation", "production"):
         raise HTTPException(status_code=400, detail="Ambiente inválido.")
     capped_limit = max(1, min(int(limit), 500))
@@ -517,18 +526,21 @@ def get_decisions(
 
 @router.get("/api/trades")
 def get_trades(
+    request: Request,
     limit: int = 50,
     days: int = 365,
     environment: Optional[str] = None,
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     env = (
         environment.strip().lower()
         if environment
         else ("homologation" if settings.SIMULATION_MODE else "production")
     )
+    if env == "simulation":
+        env = "homologation"
     if env not in ("homologation", "production"):
         raise HTTPException(status_code=400, detail="Ambiente inválido.")
     is_sim = env == "homologation"
@@ -569,18 +581,21 @@ def get_trades(
 
 @router.get("/api/equity_curve")
 def get_equity_curve(
+    request: Request,
     days: int = 30,
     limit: Optional[int] = None,
     environment: Optional[str] = None,
     _user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     env = (
         environment.strip().lower()
         if environment
         else ("homologation" if settings.SIMULATION_MODE else "production")
     )
+    if env == "simulation":
+        env = "homologation"
     if env not in ("homologation", "production"):
         raise HTTPException(status_code=400, detail="Ambiente inválido.")
     effective_days = max(1, min(int(limit if limit is not None else days), 365))
@@ -783,7 +798,7 @@ def get_capital_summary(
     _user: dict[str, Any] = Depends(get_current_user),
 ):
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     dashboard_state = getattr(request.app.state, "dashboard_state", None)
     engine = getattr(dashboard_state, "_engine", None) if dashboard_state else None
 
@@ -808,6 +823,7 @@ def get_capital_summary(
         total_eq = balance + allocated
         sim_summary = {
             "total_equity": round(total_eq, 2),
+            "operational_equity": round(total_eq, 2),
             "ai_allocated_capital": round(total_eq, 2),
             "vault_reserve_cash": 0.0,
             "free_cash": round(balance, 2),
@@ -818,7 +834,21 @@ def get_capital_summary(
         }
 
     if engine and hasattr(engine, "get_production_summary"):
-        prod_summary = engine.get_production_summary()
+        prod_summary = dict(engine.get_production_summary())
+        broker_cash = float(
+            prod_summary.get("free_cash", prod_summary.get("broker_balance", 0.0)) or 0.0
+        )
+        vault_cash = float(prod_summary.get("vault_reserve_cash", 0.0) or 0.0)
+        d2_unsettled = float(prod_summary.get("unsettled_d2_cash", 0.0) or 0.0)
+        settled_account_cash = max(0.0, broker_cash - d2_unsettled)
+        prod_summary["settled_withdrawable_cash"] = round(
+            min(vault_cash, settled_account_cash), 2
+        )
+        if "operational_equity" not in prod_summary:
+            prod_summary["operational_equity"] = round(
+                max(0.0, float(prod_summary.get("total_equity", 0.0) or 0.0) - vault_cash),
+                2,
+            )
     else:
         broker_balance = float(db.get_config("prod_broker_account_balance", "0.00") or 0.0)
         prod_ai_cap = float(db.get_config("prod_ai_allocated_capital", "0.00") or 0.0)
@@ -826,13 +856,18 @@ def get_capital_summary(
         prod_vault = max(0.0, broker_balance - prod_ai_cap)
         d2_info = db.get_d2_settlement_summary() if hasattr(db, "get_d2_settlement_summary") else {}
         d2_unsettled = float(d2_info.get("unsettled_d2_cash", 0.0) or 0.0)
+        broker_cash = broker_balance
+        vault_cash = prod_vault
+        settled_account_cash = max(0.0, broker_cash - d2_unsettled)
+        settled_withdrawable = round(min(vault_cash, settled_account_cash), 2)
 
         prod_summary = {
             "total_equity": round(broker_balance, 2),
+            "operational_equity": round(prod_ai_cap, 2),
             "ai_allocated_capital": round(prod_ai_cap, 2),
             "vault_reserve_cash": round(prod_vault, 2),
             "unsettled_d2_cash": round(d2_unsettled, 2),
-            "settled_withdrawable_cash": round(max(0.0, prod_vault - d2_unsettled), 2),
+            "settled_withdrawable_cash": settled_withdrawable,
             "next_d2_settlement_date": d2_info.get("next_settlement_date"),
             "free_cash": round(broker_balance, 2),
             "allocated_capital": 0.0,
@@ -865,15 +900,18 @@ def get_capital_summary(
 
 @router.get("/api/capital/transactions")
 def get_capital_transactions(
+    request: Request,
     limit: int = 50,
     environment: Optional[str] = None,
     _user: dict[str, Any] = Depends(get_current_user),
 ):
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
     is_sim = settings.SIMULATION_MODE
     current_env = "homologation" if is_sim else "production"
     target_env = environment.strip().lower() if environment else current_env
+    if target_env == "simulation":
+        target_env = "homologation"
     capped_limit = max(1, min(int(limit), 500))
     txs = db.get_capital_transactions(limit=capped_limit, environment=target_env)
     return {"success": True, "transactions": txs, "environment": target_env}
@@ -950,8 +988,30 @@ def create_withdrawal_goal(
     request: Request,
     user: dict[str, Any] = Depends(get_current_user_interactive),
 ):
+    if not math.isfinite(req.amount) or req.amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Valor de saque inválido. Informe um valor finito maior que zero.",
+        )
+    if req.mode not in ("instant", "on_profit"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Modo de saque inválido. Escolha 'instant' ou 'on_profit'.",
+        )
+    if req.target_equity is not None and not math.isfinite(req.target_equity):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Patrimônio alvo inválido.",
+        )
+
+    amount = round(float(req.amount), 2)
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Valor de saque deve ser superior a R$ 0,00.",
+        )
+
     db = DatabaseManager()
-    amount = round(max(1.0, float(req.amount)), 2)
     dashboard_state = getattr(request.app.state, "dashboard_state", None)
     engine = getattr(dashboard_state, "_engine", None) if dashboard_state else None
 
@@ -961,13 +1021,20 @@ def create_withdrawal_goal(
 
         broker_balance = float(db.get_config("prod_broker_account_balance", "0.00") or 0.0)
         curr_ai_cap = float(db.get_config("prod_ai_allocated_capital", "0.00") or 0.0)
-        new_ai_cap = round(max(0.0, curr_ai_cap - amount), 2)
+        curr_ai_cap = max(0.0, min(curr_ai_cap, broker_balance))
+        if curr_ai_cap <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Não há capital alocado na IA disponível para resgate imediato.",
+            )
+        transfer = round(min(amount, curr_ai_cap), 2)
+        new_ai_cap = round(max(0.0, curr_ai_cap - transfer), 2)
         new_vault = round(max(0.0, broker_balance - new_ai_cap), 2)
         db.set_config("prod_ai_allocated_capital", str(new_ai_cap))
         db.set_config("prod_vault_reserve_cash", str(new_vault))
         db.record_capital_transaction(
             "RESGATE_IMEDIATO",
-            amount,
+            transfer,
             new_ai_cap,
             new_vault,
             f"Saque imediato por {user['username']}",
@@ -976,22 +1043,25 @@ def create_withdrawal_goal(
         )
         return {
             "success": True,
-            "message": f"R$ {amount:.2f} transferido para o cofre seguro",
+            "amount": transfer,
+            "message": f"R$ {transfer:.2f} transferido para o cofre seguro",
         }
 
     if engine and hasattr(engine, "get_production_summary"):
         prod_sum = engine.get_production_summary()
         total_eq = float(prod_sum.get("total_equity", 0.0) or 0.0)
         curr_ai_cap = float(prod_sum.get("ai_allocated_capital", 0.0) or 0.0)
+        op_eq = float(prod_sum.get("operational_equity", curr_ai_cap) or 0.0)
     else:
         total_eq = float(db.get_config("prod_broker_account_balance", "0.00") or 0.0)
         curr_ai_cap = float(db.get_config("prod_ai_allocated_capital", "0.00") or 0.0)
-        curr_ai_cap = min(curr_ai_cap, total_eq)
+        curr_ai_cap = max(0.0, min(curr_ai_cap, total_eq))
+        op_eq = curr_ai_cap
 
-    base_equity = curr_ai_cap if curr_ai_cap > 0 else total_eq
+    base_equity = op_eq if op_eq > 0 else (curr_ai_cap if curr_ai_cap > 0 else total_eq)
     target_eq = (
         float(req.target_equity)
-        if req.target_equity and req.target_equity > base_equity
+        if req.target_equity is not None and req.target_equity > base_equity
         else base_equity + amount
     )
 
@@ -1001,7 +1071,7 @@ def create_withdrawal_goal(
         target_equity=target_eq,
         base_equity=base_equity,
         notes=(
-            f"Meta de lucro: R$ {amount:.2f} acima do teto da IA "
+            f"Meta de lucro: R$ {amount:.2f} acima do patrimônio operacional da IA "
             f"(Alvo: R$ {target_eq:.2f}) criada por {user['username']}"
         ),
     )
@@ -1044,7 +1114,7 @@ def update_risk_config(
     _user: dict[str, Any] = Depends(get_current_user_interactive),
 ):
     db = DatabaseManager()
-    settings.reload_dynamic_config(db=db)
+    _reload_dynamic_config_for_request(request, db)
 
     new_sl = settings.STOP_LOSS_PERCENT
     new_trig = settings.TRAILING_STOP_TRIGGER_PERCENT
