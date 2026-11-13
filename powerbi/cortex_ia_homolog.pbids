@@ -1,0 +1,15 @@
+{
+  "version": "0.1",
+  "connections": [
+    {
+      "details": {
+        "protocol": "http",
+        "address": {
+          "url": "http://localhost:9003/api/bi/v1/metadata"
+        }
+      },
+      "options": {},
+      "mode": "Import"
+    }
+  ]
+}

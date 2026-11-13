@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Córtex Monitor</string>
+    <color name="cortex_background">#FF0B1220</color>
+    <color name="ic_launcher_background">#FF0B1220</color>
+</resources>

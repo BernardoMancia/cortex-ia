@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Córtex IA — Cockpit Institucional B3</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cockpit.css">
+  <link rel="stylesheet" href="/static/css/modals.css">
+</head>
+<body>
+  <div class="cockpit-shell">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-lockup">
+          <span class="brand-mark">CX</span>
+          <div>
+            <div class="brand-title">Córtex IA</div>
+            <div class="brand-version" id="brand-version">v0.2.0 • B3</div>
+          </div>
+        </div>
+        <span class="badge badge-prod" id="env-badge">CARREGANDO AMBIENTE</span>
+        <span class="badge badge-neutral" id="market-badge">PREGÃO —</span>
+      </div>
+
+      <div class="topbar-center">
+        <div class="wallet-selector-group">
+          <select id="wallet-select" class="wallet-select" aria-label="Selecionar Carteira">
+            <option value="">Carregando carteiras...</option>
+          </select>
+          <button type="button" id="btn-new-wallet" class="btn btn-sm btn-primary">+ Nova Carteira</button>
+        </div>
+        <span class="badge badge-neutral" id="mode-badge">MODO —</span>
+      </div>
+
+      <div class="topbar-right">
+        <button type="button" id="btn-open-panic" class="btn btn-panic">🚨 PÂNICO</button>
+        <button type="button" id="btn-go-security" class="btn">🔐 Segurança</button>
+        <button type="button" id="btn-go-admin" class="btn btn-admin" hidden style="display:none">🛡️ Painel de Admin</button>
+        <span class="badge badge-neutral" id="current-username">—</span>
+        <button type="button" id="btn-logout" class="btn btn-sm">Sair</button>
+      </div>
+    </header>
+
+    <section id="maintenance-banner" class="alert-banner alert-banner-maintenance" hidden>
+      <div>
+        <strong>🔒 MODO MANUTENÇÃO PÓS-BOOT ATIVO:</strong>
+        <span id="maintenance-banner-reason">Ordens reais bloqueadas preventivamente após inicialização do servidor. O radar quantitativo segue monitorando a B3.</span>
+      </div>
+      <div class="topbar-right">
+        <button type="button" id="btn-open-preflight" class="btn btn-amber" hidden style="display:none">🔍 Pre-Flight Check &amp; Liberar Produção</button>
+      </div>
+    </section>
+
+    <section id="panic-banner" class="alert-banner alert-banner-panic" hidden>
+      <div>
+        <strong id="panic-banner-title">🚨 MODO PÂNICO ATIVO:</strong>
+        <span id="panic-banner-reason">Execução automática suspensa imediatamente.</span>
+        <strong class="text-mono" id="panic-countdown-text"></strong>
+      </div>
+      <div>
+        <button type="button" id="btn-clear-panic" class="btn btn-emerald">Retomar Operação</button>
+      </div>
+    </section>
+
+    <nav class="tabs-nav" aria-label="Navegação do Cockpit">
+      <button type="button" class="tab-btn active" data-tab="tab-overview">Visão Geral</button>
+      <button type="button" class="tab-btn" data-tab="tab-market">Mercado &amp; IA</button>
+      <button type="button" class="tab-btn" data-tab="tab-capital">Capital &amp; Cofre D+2</button>
+      <button type="button" class="tab-btn" data-tab="tab-risk">Risco &amp; Carteiras</button>
+      <button type="button" class="tab-btn" data-tab="tab-bi">📊 Power BI &amp; Gráficos</button>
+      <button type="button" class="tab-btn" data-tab="tab-guide">Guia B3</button>
+      <button type="button" class="tab-btn" data-tab="tab-security">Minha Segurança</button>
+      <button type="button" id="tab-btn-admin" class="tab-btn tab-btn-admin" data-tab="tab-admin" hidden style="display:none">🛡️ Painel de Admin</button>
+    </nav>
+
+    <main class="cockpit-main">
+      <section id="tab-overview" class="tab-panel active">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Patrimônio Operacional</div>
+            <div class="kpi-value" id="kpi-operational-equity">R$ 0,00</div>
+            <div class="kpi-sub" id="kpi-total-equity-sub">Patrimônio Total: R$ 0,00</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Saldo Livre / Poder IA</div>
+            <div class="kpi-value" id="kpi-free-cash">R$ 0,00</div>
+            <div class="kpi-sub" id="kpi-buying-power-sub">Disponível IA: R$ 0,00</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Cofre Protegido</div>
+            <div class="kpi-value" id="kpi-vault-cash">R$ 0,00</div>
+            <div class="kpi-sub">Intocável pelo motor de ordens</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">PnL Não Realizado</div>
+            <div class="kpi-value" id="kpi-unrealized-pnl">R$ 0,00</div>
+            <div class="kpi-sub" id="kpi-realized-pnl-sub">Realizado acumulado: R$ 0,00</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Win Rate &amp; Execuções</div>
+            <div class="kpi-value" id="kpi-win-rate">0,0%</div>
+            <div class="kpi-sub" id="kpi-total-trades-sub">0 operações registradas</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Termômetro Fiscal PF (R$ 20k)</div>
+            <div class="kpi-value" id="kpi-tax-sold">R$ 0,00</div>
+            <div class="progress-track">
+              <div class="progress-fill" id="tax-progress-fill" style="width:0%"></div>
+            </div>
+            <div class="kpi-sub" id="kpi-tax-remaining-sub">Margem isenta restante: R$ 20.000,00</div>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Curva de Patrimônio da Carteira</h2>
+              <p class="panel-subtitle">Evolução consolidada diária da carteira selecionada</p>
+            </div>
+            <span class="badge badge-neutral" id="active-wallet-pill">Sem carteira</span>
+          </div>
+          <div class="chart-box">
+            <canvas id="equity-chart"></canvas>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Custódia Aberta na Carteira</h2>
+              <p class="panel-subtitle">Ative 🔒 Proteger para impedir qualquer venda automática pela IA ou resgate</p>
+            </div>
+            <button type="button" id="btn-refresh-overview" class="btn btn-sm">Atualizar Agora</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Ativo</th>
+                  <th>Qtd</th>
+                  <th>PM Entrada</th>
+                  <th>Cotação Atual</th>
+                  <th>Stop-Loss</th>
+                  <th>Valor Mercado</th>
+                  <th>PnL</th>
+                  <th>Proteção Manual</th>
+                </tr>
+              </thead>
+              <tbody id="positions-tbody">
+                <tr><td colspan="8" class="empty-state">Nenhuma posição aberta nesta carteira.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Últimas Decisões Quantitativas</h2>
+                <p class="panel-subtitle">Auditoria do motor técnico, sentimento e firewall financeiro</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Horário</th>
+                    <th>Ativo</th>
+                    <th>Decisão</th>
+                    <th>Conf.</th>
+                    <th>Racional</th>
+                  </tr>
+                </thead>
+                <tbody id="overview-decisions-tbody">
+                  <tr><td colspan="5" class="empty-state">Sem decisões recentes.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Últimas Ordens Executadas</h2>
+                <p class="panel-subtitle">Histórico auditável de compras e vendas da carteira</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data/Hora</th>
+                    <th>Ativo</th>
+                    <th>Lado</th>
+                    <th>Qtd</th>
+                    <th>Preço</th>
+                    <th>PnL Realizado</th>
+                  </tr>
+                </thead>
+                <tbody id="overview-trades-tbody">
+                  <tr><td colspan="6" class="empty-state">Nenhuma ordem executada até o momento.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-market" class="tab-panel">
+        <div class="grid-3">
+          <div class="kpi-card">
+            <div class="kpi-label">Sessão B3 &amp; Cooldown</div>
+            <div class="kpi-value" id="mkt-session-state">—</div>
+            <div class="kpi-sub" id="mkt-cooldown-sub">Janela de abertura: verificando</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Regime Macro BOVA11</div>
+            <div class="kpi-value" id="mkt-bova11-pct">0,00%</div>
+            <div class="kpi-sub" id="mkt-regime-sub">Filtro de proteção sistêmica</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Saúde do Motor &amp; Servidor</div>
+            <div class="kpi-value" id="mkt-health-cpu">CPU 0% • RAM 0%</div>
+            <div class="kpi-sub" id="mkt-cycle-sub">Ciclo compartilhado Market Hub</div>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Radar Quantitativo B3</h2>
+              <p class="panel-subtitle">Indicadores técnicos multi-timeframe e sentimento por ativo monitorado</p>
+            </div>
+            <div>
+              <input type="search" id="market-search-input" class="field-input" placeholder="Filtrar ticker (ex: PETR4, VALE3)...">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Ticker</th>
+                  <th>Preço</th>
+                  <th>Var %</th>
+                  <th>RSI(14)</th>
+                  <th>MACD Hist</th>
+                  <th>ADX</th>
+                  <th>Sinal Técnico</th>
+                  <th>Sentimento</th>
+                  <th>Atualizado</th>
+                </tr>
+              </thead>
+              <tbody id="market-radar-tbody">
+                <tr><td colspan="9" class="empty-state">Aguardando primeira leitura do Market Intelligence Hub.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Notícias RSS &amp; Termômetro de Sentimento</h2>
+              <p class="panel-subtitle">Manchetes financeiras processadas localmente com sanitização anti-prompt-injection</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Horário</th>
+                  <th>Ativo / Fonte</th>
+                  <th>Manchete</th>
+                  <th>Sentimento</th>
+                </tr>
+              </thead>
+              <tbody id="market-headlines-tbody">
+                <tr><td colspan="4" class="empty-state">Nenhuma manchete coletada recentemente.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-capital" class="tab-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Gestão Real de Capital, Cofre &amp; Liquidação B3 (D+2)</h2>
+              <p class="panel-subtitle">Sincronização direta com corretora, isolamento de caixa e preparação de resgate</p>
+            </div>
+            <button type="button" id="btn-sync-broker" class="btn btn-primary">🔄 Sincronizar com Corretora</button>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Caixa Livre na Carteira</div>
+              <div class="kpi-value" id="cap-free-cash">R$ 0,00</div>
+              <div class="kpi-sub" id="cap-broker-conn-sub">Corretora: —</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Teto Alocado à IA</div>
+              <div class="kpi-value" id="cap-ai-ceiling">R$ 0,00</div>
+              <div class="kpi-sub" id="cap-available-ai-sub">Poder de compra IA: R$ 0,00</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Cofre de Reserva Blindado</div>
+              <div class="kpi-value" id="cap-vault-cash">R$ 0,00</div>
+              <div class="kpi-sub">Bloqueado para compras automáticas</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Liquidado p/ Saque PIX</div>
+              <div class="kpi-value" id="cap-settled-cash">R$ 0,00</div>
+              <div class="kpi-sub" id="cap-d2-pending-sub">Pendente D+2: R$ 0,00</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-3">
+          <div class="panel-card">
+            <h3 class="panel-title">Teto Operacional da IA</h3>
+            <p class="panel-subtitle">Limite máximo de capital que o motor pode alocar em posições (requer Step-Up)</p>
+            <form id="form-ai-ceiling" style="margin-top:12px">
+              <div class="field-group">
+                <label class="field-label" for="input-ai-ceiling">Novo Teto da IA (R$)</label>
+                <input type="number" id="input-ai-ceiling" class="field-input" step="0.01" min="0" required placeholder="Ex: 25000.00">
+              </div>
+              <button type="submit" class="btn btn-primary">Salvar Teto da IA</button>
+            </form>
+          </div>
+
+          <div class="panel-card">
+            <h3 class="panel-title">Cofre de Reserva</h3>
+            <p class="panel-subtitle">Proteja lucros e caixa livre contra novas entradas automáticas</p>
+            <form id="form-vault-deposit" style="margin-top:12px">
+              <div class="field-group">
+                <label class="field-label" for="input-vault-deposit">Guardar no Cofre (R$)</label>
+                <input type="number" id="input-vault-deposit" class="field-input" step="0.01" min="0.01" required placeholder="Valor do Caixa Livre">
+              </div>
+              <button type="submit" class="btn btn-emerald">Blindar no Cofre</button>
+            </form>
+            <form id="form-vault-release" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border-subtle)">
+              <div class="field-group">
+                <label class="field-label" for="input-vault-release">Liberar do Cofre p/ Caixa Livre (Step-Up)</label>
+                <input type="number" id="input-vault-release" class="field-input" step="0.01" min="0.01" required placeholder="Valor do Cofre">
+              </div>
+              <button type="submit" class="btn btn-amber">Liberar do Cofre</button>
+            </form>
+          </div>
+
+          <div class="panel-card">
+            <h3 class="panel-title">Liquidação Inteligente p/ Saque</h3>
+            <p class="panel-subtitle">Isola saldo ou liquida posições desprotegidas respeitando D+2 da B3 (Step-Up)</p>
+            <div id="active-withdraw-goal-box" class="info-callout" hidden>
+              <div id="active-withdraw-goal-text">Meta de resgate ativa.</div>
+              <button type="button" id="btn-cancel-withdraw-goal" class="btn btn-sm" style="margin-top:8px">Cancelar Meta Agendada</button>
+            </div>
+            <form id="form-withdraw" style="margin-top:12px">
+              <div class="field-group">
+                <label class="field-label" for="input-withdraw-amount">Valor Desejado p/ Resgate (R$)</label>
+                <input type="number" id="input-withdraw-amount" class="field-input" step="0.01" min="1" required placeholder="Ex: 5000.00">
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="select-withdraw-mode">Modalidade de Liquidação</label>
+                <select id="select-withdraw-mode" class="field-select">
+                  <option value="instant">Imediata (usa caixa livre + vende custódia se necessário)</option>
+                  <option value="on_profit">Agendar no Lucro (executa ao atingir meta patrimonial)</option>
+                </select>
+              </div>
+              <button type="submit" class="btn btn-primary">Solicitar Preparação de Resgate</button>
+            </form>
+          </div>
+        </div>
+
+        <div id="sim-capital-card" class="panel-card" hidden style="display:none">
+          <div class="panel-header">
+            <div>
+              <h3 class="panel-title">🧪 Controles de Capital Simulado (Exclusivo Homologação)</h3>
+              <p class="panel-subtitle">Disponível apenas quando o servidor opera em modo simulado B3</p>
+            </div>
+            <span class="badge badge-sim">SIMULAÇÃO</span>
+          </div>
+          <div class="info-callout">
+            Ambiente de Homologação detectado. Utilize o gerenciador de carteiras ou os endpoints de simulação caso habilitados na instância de testes.
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel-card">
+            <h3 class="panel-title">Cronograma de Liquidação B3 (D+2)</h3>
+            <p class="panel-subtitle">Vendas de ações na B3 liquidam financeiramente em 2 dias úteis</p>
+            <div class="table-wrap" style="margin-top:10px">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data Liquidação</th>
+                    <th>Vendas Líquidas</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="d2-schedule-tbody">
+                  <tr><td colspan="3" class="empty-state">Sem liquidações D+2 pendentes.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <h3 class="panel-title">Razão Auditável de Capital</h3>
+            <p class="panel-subtitle">Movimentações de teto IA, cofre e preparações de resgate</p>
+            <div class="table-wrap" style="margin-top:10px">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Data/Hora</th>
+                    <th>Evento</th>
+                    <th>Valor</th>
+                    <th>Detalhes</th>
+                  </tr>
+                </thead>
+                <tbody id="capital-tx-tbody">
+                  <tr><td colspan="4" class="empty-state">Sem movimentações registradas.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-risk" class="tab-panel">
+        <div class="grid-2">
+          <div class="panel-card">
+            <h2 class="panel-title">Parâmetros de Risco &amp; Proteção Tributária</h2>
+            <p class="panel-subtitle">Configurações individuais aplicadas exclusivamente à carteira ativa</p>
+            <form id="form-risk-settings" style="margin-top:14px">
+              <div class="form-grid">
+                <div class="field-group">
+                  <label class="field-label" for="risk-stop-loss">Stop-Loss Fixo (%)</label>
+                  <input type="number" id="risk-stop-loss" class="field-input" step="0.1" min="0.5" max="50" required>
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="risk-trailing-trigger">Gatilho Trailing Stop (%)</label>
+                  <input type="number" id="risk-trailing-trigger" class="field-input" step="0.1" min="0.5" max="30" required>
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="risk-trailing-distance">Distância Trailing Stop (%)</label>
+                  <input type="number" id="risk-trailing-distance" class="field-input" step="0.1" min="0.3" max="20" required>
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="risk-telegram-chat">Telegram Chat ID da Carteira</label>
+                  <input type="text" id="risk-telegram-chat" class="field-input" maxlength="48" placeholder="Opcional (ex: 123456789)">
+                </div>
+              </div>
+              <label class="checkbox-row">
+                <input type="checkbox" id="risk-protect-20k">
+                <span>Ativar Escudo de Isenção PF B3 (trava vendas com lucro acima de R$ 19.500/mês)</span>
+              </label>
+              <label class="checkbox-row">
+                <input type="checkbox" id="risk-avoid-daytrade">
+                <span>Evitar Day-Trade (bloqueia venda lucrativa no mesmo pregão da compra — alíquota 20%)</span>
+              </label>
+              <div style="margin-top:12px">
+                <button type="submit" class="btn btn-primary">Salvar Regras da Carteira</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="panel-card">
+            <h2 class="panel-title">Firewall Financeiro Institucional (Hard-Limits)</h2>
+            <p class="panel-subtitle">Travas imutáveis do servidor contra anomalias de execução</p>
+            <ul class="preflight-list" id="firewall-limits-list">
+              <li class="preflight-item"><span>Concentração Máx. por Ativo</span><strong id="fw-max-conc">25%</strong></li>
+              <li class="preflight-item"><span>Exposição Máx. por Setor B3</span><strong id="fw-max-sector">40%</strong></li>
+              <li class="preflight-item"><span>Perda Diária Máxima (Circuit Breaker)</span><strong id="fw-max-daily">3,0%</strong></li>
+              <li class="preflight-item"><span>Risco Máximo por Operação</span><strong id="fw-max-trade-risk">2,0%</strong></li>
+              <li class="preflight-item"><span>Teto Isenção Swing Trade PF</span><strong id="fw-exemption">R$ 20.000,00</strong></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Minhas Carteiras Isoladas</h2>
+              <p class="panel-subtitle">Credenciais cifradas com AES-256-GCM + HKDF por usuário e por carteira</p>
+            </div>
+            <button type="button" id="btn-risk-new-wallet" class="btn btn-primary">+ Adicionar Carteira</button>
+          </div>
+          <div id="wallets-cards-grid" class="connector-grid"></div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Catálogo de Conectores de Corretoras B3</h2>
+              <p class="panel-subtitle">Conectores em desenvolvimento operam em modo seguro Apenas Monitorar (OBSERVE_ONLY)</p>
+            </div>
+          </div>
+          <div id="connectors-catalog-grid" class="connector-grid"></div>
+        </div>
+      </section>
+
+      <section id="tab-bi" class="tab-panel">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Sharpe Anualizado</div>
+            <div class="kpi-value" id="bi-kpi-sharpe">0,00</div>
+            <div class="kpi-sub" id="bi-kpi-vol-sub">Volatilidade anual: 0,00%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Sortino Anualizado</div>
+            <div class="kpi-value" id="bi-kpi-sortino">0,00</div>
+            <div class="kpi-sub" id="bi-kpi-calmar-sub">Calmar Ratio: 0,00</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Max Drawdown</div>
+            <div class="kpi-value" id="bi-kpi-max-dd">0,00%</div>
+            <div class="kpi-sub" id="bi-kpi-cur-dd-sub">Drawdown atual: 0,00%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Profit Factor</div>
+            <div class="kpi-value" id="bi-kpi-profit-factor">0,00</div>
+            <div class="kpi-sub" id="bi-kpi-winrate-sub">Win Rate: 0,0%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Payoff Ratio</div>
+            <div class="kpi-value" id="bi-kpi-payoff">0,00</div>
+            <div class="kpi-sub" id="bi-kpi-avgwinloss-sub">Ganho R$ 0,00 / Perda R$ 0,00</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Expectativa Matemática</div>
+            <div class="kpi-value" id="bi-kpi-expectancy">R$ 0,00</div>
+            <div class="kpi-sub" id="bi-kpi-posdays-sub">Pregões positivos: 0,0%</div>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Conector Oficial Microsoft Power BI &amp; Star-Schema B3</h2>
+              <p class="panel-subtitle">Exporte curvas patrimoniais, custódia, ordens, decisões da IA e liquidações D+2 com isolamento criptográfico somente-leitura</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" id="btn-refresh-bi" class="btn btn-sm">Atualizar KPIs</button>
+              <button type="button" id="btn-download-pbids" class="btn btn-primary">⬇️ Baixar Conector Power BI (.pbids)</button>
+            </div>
+          </div>
+
+          <div id="bi-generated-token-box" class="info-callout" hidden>
+            <strong>🔑 Token Power BI Somente-Leitura Gerado (copie e salve agora — exibido apenas uma única vez):</strong>
+            <div class="text-mono" id="bi-generated-token-value" style="font-size:14px;margin-top:8px;word-break:break-all;user-select:all"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+              <button type="button" id="btn-copy-bi-token" class="btn btn-sm btn-emerald">📋 Copiar Token Bearer</button>
+              <button type="button" id="btn-download-pbids-inline" class="btn btn-sm btn-primary">⬇️ Baixar Conector Power BI (.pbids)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel-card">
+            <h3 class="panel-title">Gerar Novo Token Somente-Leitura Power BI</h3>
+            <p class="panel-subtitle">Tokens prefixados com ctx_bi_ são bloqueados por firewall contra qualquer rota fora de /api/bi/v1/* (requer Step-Up)</p>
+            <form id="form-create-bi-key" style="margin-top:14px">
+              <div class="field-group">
+                <label class="field-label" for="bi-key-label">Nome / Rótulo da Integração</label>
+                <input type="text" id="bi-key-label" class="field-input" minlength="2" maxlength="80" required placeholder="Ex: Power BI Desktop Institucional">
+              </div>
+              <div class="form-grid">
+                <div class="field-group">
+                  <label class="field-label" for="bi-key-wallet-scope">Escopo de Carteira</label>
+                  <select id="bi-key-wallet-scope" class="field-select">
+                    <option value="">Todas as minhas carteiras</option>
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label class="field-label" for="bi-key-expiry">Validade da Chave</label>
+                  <select id="bi-key-expiry" class="field-select">
+                    <option value="30">30 dias</option>
+                    <option value="90" selected>90 dias (Recomendado)</option>
+                    <option value="365">365 dias</option>
+                    <option value="0">Sem expiração</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="bi-key-cidr">Lista de IPs / Redes CIDR Permitidas (Opcional)</label>
+                <input type="text" id="bi-key-cidr" class="field-input text-mono" maxlength="512" placeholder="Ex: 192.168.1.0/24, 10.0.0.15 (vazio = qualquer IP)">
+              </div>
+              <label class="checkbox-row" id="bi-key-admin-row" hidden style="display:none">
+                <input type="checkbox" id="bi-key-include-admin">
+                <span>Incluir visão administrativa global da plataforma em /api/bi/v1/metadata (Exclusivo Luke)</span>
+              </label>
+              <div style="margin-top:12px">
+                <button type="submit" class="btn btn-primary">🔐 Emitir Token Somente-Leitura (Step-Up)</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="panel-card">
+            <h3 class="panel-title">Parâmetros Star-Schema &amp; Córtex Charts</h3>
+            <p class="panel-subtitle">Use estes dados no Power Query (M) do Power BI Desktop ou conecte sua conta no app Android Córtex Charts</p>
+            <ul class="preflight-list" style="margin-top:14px">
+              <li class="preflight-item"><span>ServerBaseUrl Atual</span><strong class="text-mono" id="bi-server-base-url">—</strong></li>
+              <li class="preflight-item"><span>Cabeçalho HTTP</span><strong class="text-mono">Authorization: Bearer ctx_bi_...</strong></li>
+              <li class="preflight-item"><span>Dimensões Relacionais</span><strong class="text-mono">dim_wallets • dim_assets_b3 • dim_calendar_b3</strong></li>
+              <li class="preflight-item"><span>Tabelas Fato Analíticas</span><strong class="text-mono">fact_equity • fact_positions • fact_trades • fact_decisions</strong></li>
+              <li class="preflight-item"><span>Liquidação &amp; Radar B3</span><strong class="text-mono">fact_cashflow_d2 • fact_market_radar • kpi_summary</strong></li>
+              <li class="preflight-item"><span>Firewall de Escopo</span><strong>100% GET Somente-Leitura (/api/bi/v1/*)</strong></li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h3 class="panel-title">Tokens BI Emitidos na Minha Conta</h3>
+              <p class="panel-subtitle">Chaves armazenadas exclusivamente como HMAC-SHA256 com revogação instantânea</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Rótulo</th>
+                  <th>Escopo Carteira</th>
+                  <th>Prefixo</th>
+                  <th>CIDR</th>
+                  <th>Status / Validade</th>
+                  <th>Último Uso</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+              <tbody id="bi-keys-tbody">
+                <tr><td colspan="7" class="empty-state">Nenhum token Power BI emitido até o momento.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-guide" class="tab-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title" id="guide-main-title">Guia Operacional &amp; Tributário B3</h2>
+              <p class="panel-subtitle" id="guide-main-subtitle">Base de conhecimento integrada ao Córtex IA</p>
+            </div>
+            <div>
+              <input type="search" id="guide-search-input" class="field-input" placeholder="Pesquisar termo ou regra...">
+            </div>
+          </div>
+          <div id="guide-sections-list" class="grid-2"></div>
+        </div>
+
+        <div class="panel-card">
+          <h3 class="panel-title">Glossário Técnico &amp; B3</h3>
+          <div id="guide-glossary-list" class="connector-grid" style="margin-top:12px"></div>
+        </div>
+      </section>
+
+      <section id="tab-security" class="tab-panel">
+        <div class="grid-2">
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2 class="panel-title">Autenticação em Duas Etapas (2FA TOTP Offline)</h2>
+                <p class="panel-subtitle">Compatível com Google Authenticator, Authy, 1Password e Bitwarden — zero envio externo</p>
+              </div>
+              <span class="badge badge-neutral" id="totp-status-badge">VERIFICANDO</span>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+              <button type="button" id="btn-totp-setup" class="btn btn-primary">Gerar QR Code 2FA Offline</button>
+              <button type="button" id="btn-totp-disable" class="btn btn-amber" hidden>Desativar 2FA (Step-Up)</button>
+            </div>
+
+            <div id="totp-setup-box" hidden>
+              <div class="qr-preview-box">
+                <img id="totp-qr-img" alt="QR Code 2FA TOTP Offline" width="210" height="210" style="background:#fff;padding:8px;border-radius:8px">
+                <div class="text-mono" style="font-size:12px;word-break:break-all">
+                  Chave Manual: <strong id="totp-secret-code">—</strong>
+                </div>
+              </div>
+
+              <div class="danger-callout">
+                <strong>Guarde seus 8 códigos de recuperação de uso único em local seguro:</strong>
+                <div id="totp-recovery-grid" class="recovery-grid" style="margin-top:8px"></div>
+              </div>
+
+              <form id="form-totp-enable">
+                <div class="field-group">
+                  <label class="field-label" for="input-totp-enable-code">Digite o código de 6 dígitos gerado no app para ativar</label>
+                  <input type="text" id="input-totp-enable-code" class="field-input text-mono" inputmode="numeric" maxlength="8" required placeholder="000000">
+                </div>
+                <button type="submit" class="btn btn-emerald">Confirmar e Ativar 2FA</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <h2 class="panel-title">Alterar Minha Senha</h2>
+            <p class="panel-subtitle">Mínimo de 8 caracteres combinando letras, números e símbolos (PBKDF2-HMAC-SHA256 600k + Pepper)</p>
+            <form id="form-change-password" style="margin-top:14px">
+              <div class="field-group">
+                <label class="field-label" for="sec-current-password">Senha Atual</label>
+                <input type="password" id="sec-current-password" class="field-input" autocomplete="current-password" required>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="sec-new-password">Nova Senha Forte</label>
+                <input type="password" id="sec-new-password" class="field-input" autocomplete="new-password" required>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="sec-confirm-password">Confirmar Nova Senha</label>
+                <input type="password" id="sec-confirm-password" class="field-input" autocomplete="new-password" required>
+              </div>
+              <div class="field-group" id="sec-totp-field-wrap" hidden>
+                <label class="field-label" for="sec-totp-code">Código 2FA TOTP (6 dígitos)</label>
+                <input type="text" id="sec-totp-code" class="field-input text-mono" inputmode="numeric" maxlength="8" placeholder="000000">
+              </div>
+              <button type="submit" class="btn btn-primary">Atualizar Senha e Revogar Outras Sessões</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">Sessões Ativas da Minha Conta</h2>
+              <p class="panel-subtitle">Vinculadas por hash de User-Agent e expiração automática por inatividade</p>
+            </div>
+            <button type="button" id="btn-revoke-other-sessions" class="btn btn-amber">Encerrar Outras Sessões</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Sessão</th>
+                  <th>Endereço IP</th>
+                  <th>Criada em</th>
+                  <th>Última Atividade</th>
+                  <th>Expira em</th>
+                </tr>
+              </thead>
+              <tbody id="sessions-tbody">
+                <tr><td colspan="5" class="empty-state">Carregando sessões...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-admin" class="tab-panel" hidden style="display:none">
+        <div class="panel-card">
+          <div class="panel-header">
+            <div>
+              <h2 class="panel-title">🛡️ Painel Administrativo Exclusivo — Luke</h2>
+              <p class="panel-subtitle">Gestão de operadores convidados, integridade HMAC-SHA256 e telemetria bruta do servidor</p>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button type="button" id="btn-open-create-user" class="btn btn-primary">+ Cadastrar Novo Usuário</button>
+              <button type="button" id="btn-admin-preflight" class="btn btn-emerald">🔍 Pre-Flight &amp; Liberar Produção</button>
+              <button type="button" id="btn-admin-enter-maintenance" class="btn btn-amber">🔒 Entrar em Manutenção</button>
+            </div>
+          </div>
+
+          <div id="admin-temp-password-box" class="info-callout" hidden>
+            <strong>Credencial Temporária de 24h Gerada (copie e envie com segurança — exibida apenas uma vez):</strong>
+            <div class="text-mono" id="admin-temp-password-value" style="font-size:15px;margin-top:6px;user-select:all"></div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Usuário</th>
+                  <th>Perfil</th>
+                  <th>Status</th>
+                  <th>2FA</th>
+                  <th>Troca Senha / Convite</th>
+                  <th>Último Login</th>
+                  <th>Ações Step-Up</th>
+                </tr>
+              </thead>
+              <tbody id="admin-users-tbody">
+                <tr><td colspan="8" class="empty-state">Carregando operadores...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h3 class="panel-title">Livro-Razão Imutável HMAC-SHA256</h3>
+                <p class="panel-subtitle">Verificação criptográfica contra adulteração de auditoria</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span class="badge badge-neutral" id="audit-integrity-badge">NÃO VERIFICADO</span>
+                <button type="button" id="btn-verify-audit" class="btn btn-sm btn-primary">Verificar Cadeia</button>
+              </div>
+            </div>
+            <div class="table-wrap" style="max-height:360px;overflow-y:auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Horário</th>
+                    <th>Evento</th>
+                    <th>Ator / IP</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-audit-tbody">
+                  <tr><td colspan="4" class="empty-state">Carregando eventos de segurança...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h3 class="panel-title">Logs Ao Vivo do Servidor (Scrubbed)</h3>
+                <p class="panel-subtitle">Streaming WebSocket autenticado exclusivo de Luke</p>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span class="badge badge-neutral" id="ws-logs-badge">OFFLINE</span>
+                <button type="button" id="btn-refresh-logs" class="btn btn-sm">Recarregar</button>
+                <button type="button" id="btn-clear-logs-screen" class="btn btn-sm">Limpar</button>
+              </div>
+            </div>
+            <div id="admin-log-terminal" class="log-terminal">Conectando ao stream de logs...</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal-panic" class="modal-backdrop" hidden>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">🚨 Acionar Modo Pânico de Emergência</h3>
+        <button type="button" class="modal-close" data-close-modal="modal-panic">&times;</button>
+      </div>
+      <form id="form-panic-activate">
+        <div class="field-group">
+          <label class="field-label">Duração da Pausa Operacional</label>
+          <div class="preset-grid" id="panic-preset-grid">
+            <button type="button" class="preset-btn" data-preset="15m">15 min</button>
+            <button type="button" class="preset-btn" data-preset="30m">30 min</button>
+            <button type="button" class="preset-btn active" data-preset="1h">1 hora</button>
+            <button type="button" class="preset-btn" data-preset="2h">2 horas</button>
+            <button type="button" class="preset-btn" data-preset="4h">4 horas</button>
+            <button type="button" class="preset-btn" data-preset="next_session">Próx. Pregão</button>
+            <button type="button" class="preset-btn" data-preset="custom">Personalizado</button>
+            <button type="button" class="preset-btn" data-preset="indefinite">Indefinido</button>
+          </div>
+        </div>
+
+        <div class="field-group" id="panic-custom-minutes-group" hidden>
+          <label class="field-label" for="panic-custom-minutes">Minutos Personalizados</label>
+          <input type="number" id="panic-custom-minutes" class="field-input" min="1" max="43200" value="45">
+        </div>
+
+        <div class="field-group" id="panic-scope-group">
+          <label class="field-label" for="panic-scope-select">Escopo do Bloqueio</label>
+          <select id="panic-scope-select" class="field-select">
+            <option value="wallet">Apenas Minha Carteira Selecionada</option>
+            <option value="global" id="panic-scope-global-opt" hidden>Global — Todas as Carteiras do Servidor (Luke)</option>
+          </select>
+        </div>
+
+        <div class="field-group">
+          <label class="field-label" for="panic-reason-input">Motivo (registrado na auditoria)</label>
+          <input type="text" id="panic-reason-input" class="field-input" maxlength="200" value="Acionamento manual de emergência via Cockpit.">
+        </div>
+
+        <div class="danger-callout">
+          <label class="checkbox-row">
+            <input type="checkbox" id="panic-liquidate-checkbox">
+            <span><strong>Liquidar posições abertas a mercado agora</strong> (ignora ativos marcados com 🔒 Proteger; exige confirmação Step-Up)</span>
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn" data-close-modal="modal-panic">Cancelar</button>
+          <button type="submit" class="btn btn-panic">🚨 Travar Operações Agora</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-preflight" class="modal-backdrop" hidden>
+    <div class="modal-dialog modal-dialog-lg">
+      <div class="modal-header">
+        <h3 class="modal-title">🔍 Pre-Flight Check &amp; Desbloqueio Pós-Boot</h3>
+        <button type="button" class="modal-close" data-close-modal="modal-preflight">&times;</button>
+      </div>
+      <div id="preflight-summary-callout" class="info-callout">Executando diagnóstico de prontidão operacional...</div>
+      <ul id="preflight-checklist" class="preflight-list"></ul>
+      <div id="preflight-issues-box" class="danger-callout" hidden></div>
+
+      <label class="checkbox-row" id="preflight-force-row">
+        <input type="checkbox" id="preflight-force-checkbox">
+        <span>Forçar liberação administrativa mesmo com alertas pendentes no conector</span>
+      </label>
+
+      <div class="modal-footer">
+        <button type="button" id="btn-rerun-preflight" class="btn">Revalidar Checklist</button>
+        <button type="button" class="btn" data-close-modal="modal-preflight">Fechar</button>
+        <button type="button" id="btn-unlock-maintenance" class="btn btn-emerald">Liberar Investimentos em Produção (Step-Up)</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-step-up" class="modal-backdrop" hidden>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">🔐 Confirmação de Segurança Step-Up</h3>
+        <button type="button" class="modal-close" id="btn-cancel-step-up">&times;</button>
+      </div>
+      <p class="panel-subtitle" style="margin-bottom:14px">
+        Esta operação sensível exige confirmação de identidade. O token Step-Up permanece válido por 3 minutos nesta sessão.
+      </p>
+      <form id="form-step-up">
+        <div class="field-group">
+          <label class="field-label" for="step-up-password">Sua Senha Atual</label>
+          <input type="password" id="step-up-password" class="field-input" autocomplete="current-password" required>
+        </div>
+        <div class="field-group" id="step-up-totp-group" hidden>
+          <label class="field-label" for="step-up-totp">Código 2FA TOTP (ou Código de Recuperação)</label>
+          <input type="text" id="step-up-totp" class="field-input text-mono" maxlength="32" placeholder="6 dígitos ou códigoXXXX-XXXX">
+        </div>
+        <div id="step-up-error-box" class="danger-callout" hidden></div>
+        <div class="modal-footer">
+          <button type="button" class="btn" id="btn-abort-step-up">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Confirmar e Prosseguir</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-wallet" class="modal-backdrop" hidden>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="modal-wallet-title">Nova Carteira Isolada</h3>
+        <button type="button" class="modal-close" data-close-modal="modal-wallet">&times;</button>
+      </div>
+      <form id="form-wallet-modal">
+        <input type="hidden" id="wallet-modal-mode" value="create">
+        <input type="hidden" id="wallet-modal-id" value="">
+
+        <div id="wallet-create-only-fields">
+          <div class="field-group">
+            <label class="field-label" for="wallet-name-input">Nome da Carteira</label>
+            <input type="text" id="wallet-name-input" class="field-input" maxlength="64" placeholder="Ex: Clear Swing Trade Principal">
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="wallet-connector-select">Corretora / Conector</label>
+            <select id="wallet-connector-select" class="field-select"></select>
+          </div>
+          <div class="field-group" id="wallet-initial-cap-group">
+            <label class="field-label" for="wallet-initial-capital">Capital Base de Referência (R$)</label>
+            <input type="number" id="wallet-initial-capital" class="field-input" step="0.01" min="0" value="0">
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="wallet-make-default" checked>
+            <span>Definir como carteira padrão ao entrar</span>
+          </label>
+        </div>
+
+        <div id="wallet-connector-status-note" class="info-callout"></div>
+        <div id="wallet-dynamic-fields"></div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn" data-close-modal="modal-wallet">Cancelar</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-wallet-modal">Salvar Carteira</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="modal-admin-user" class="modal-backdrop" hidden>
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title">🛡️ Cadastrar Novo Operador (Convite 24h)</h3>
+        <button type="button" class="modal-close" data-close-modal="modal-admin-user">&times;</button>
+      </div>
+      <form id="form-admin-create-user">
+        <div class="field-group">
+          <label class="field-label" for="admin-new-username">Nome de Usuário (3 a 32 caracteres)</label>
+          <input type="text" id="admin-new-username" class="field-input" minlength="3" maxlength="32" required placeholder="Ex: marina_quant">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="admin-new-temp-pwd">Senha Temporária (deixe vazio p/ gerar automaticamente)</label>
+          <input type="text" id="admin-new-temp-pwd" class="field-input text-mono" maxlength="128" placeholder="Automática forte de 14 caracteres">
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="admin-invite-hours">Validade do Convite Inicial (horas)</label>
+          <input type="number" id="admin-invite-hours" class="field-input" min="1" max="168" value="24" required>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="admin-create-initial-wallet" checked>
+          <span>Criar carteira inicial em modo seguro para o usuário configurar ao logar</span>
+        </label>
+        <div class="modal-footer">
+          <button type="button" class="btn" data-close-modal="modal-admin-user">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Criar Usuário (Step-Up)</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/cockpit.js"></script>
+  <script src="/static/js/wallets_ui.js"></script>
+  <script src="/static/js/panic_maintenance_ui.js"></script>
+  <script src="/static/js/security_2fa_ui.js"></script>
+  <script src="/static/js/luke_admin_ui.js"></script>
+  <script src="/static/js/bi_ui.js"></script>
+  <script src="/static/js/main.js"></script>
+</body>
+</html>

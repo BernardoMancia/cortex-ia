@@ -1,1 +1,1 @@
-"""Pacote de testes do Projeto Córtex."""
+from __future__ import annotations

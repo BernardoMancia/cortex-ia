@@ -1,40 +1,42 @@
-"""
-Módulo de configurações centrais do Projeto Córtex.
-
-Carrega variáveis de ambiente, define constantes de negociação,
-horários de mercado, feriados da B3 e lista de ativos monitorados.
-Implementa padrão singleton para garantir instância única.
-"""
-
 from __future__ import annotations
 
-import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-logger = logging.getLogger("cortex.config")
+from config.b3_universe import ALL_B3_TICKERS, B3_PORTFOLIOS, SECTOR_MAP
+from config.env_profile import (
+    CENTRAL_LOG_DB,
+    CYCLE_SECOND_OFFSET,
+    DEFAULT_CYCLE_INTERVAL,
+    DEFAULT_PORT,
+    ENVIRONMENT_ID,
+    ENVIRONMENT_LABEL,
+    FORCE_MAINTENANCE_ON_BOOT,
+    IS_PRODUCTION,
+    IS_SIMULATION,
+    PROJECT_SLUG,
+)
 
-_PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
-
-_env_path = _PROJECT_ROOT / ".env"
-load_dotenv(dotenv_path=_env_path if _env_path.exists() else None)
+PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parent.parent
+_env_file = PROJECT_ROOT / ".env"
+load_dotenv(dotenv_path=_env_file if _env_file.exists() else None)
 
 BRT: Final[ZoneInfo] = ZoneInfo("America/Sao_Paulo")
+OWNER_USERNAME: Final[str] = "Luke"
+OWNER_USER_ID: Final[int] = 1
 
 
 def _env_bool(key: str, default: bool = False) -> bool:
-    """Converte variável de ambiente para booleano."""
     val = os.getenv(key, str(default)).strip().lower()
     return val in ("true", "1", "yes", "sim")
 
 
 def _env_float(key: str, default: float = 0.0) -> float:
-    """Converte variável de ambiente para float finito."""
     try:
         res = float(os.getenv(key, str(default)))
         return res if math.isfinite(res) else default
@@ -43,7 +45,6 @@ def _env_float(key: str, default: float = 0.0) -> float:
 
 
 def _env_int(key: str, default: int = 0) -> int:
-    """Converte variável de ambiente para inteiro."""
     try:
         return int(os.getenv(key, str(default)))
     except (ValueError, TypeError):
@@ -51,397 +52,131 @@ def _env_int(key: str, default: int = 0) -> int:
 
 
 class Settings:
-    """
-    Configurações centrais do sistema Córtex.
+    def __init__(self) -> None:
+        self.PROJECT_ROOT: Path = PROJECT_ROOT
+        self.VERSION: str = "0.2.0"
+        self.ENVIRONMENT_ID: str = ENVIRONMENT_ID
+        self.ENVIRONMENT_LABEL: str = ENVIRONMENT_LABEL
+        self.IS_PRODUCTION: bool = IS_PRODUCTION
+        self.IS_SIMULATION: bool = IS_SIMULATION
+        self.PROJECT_SLUG: str = PROJECT_SLUG
+        self.CENTRAL_LOG_DB: str = os.getenv("CENTRAL_LOG_DB", CENTRAL_LOG_DB).strip() or CENTRAL_LOG_DB
+        self.FORCE_MAINTENANCE_ON_BOOT: bool = FORCE_MAINTENANCE_ON_BOOT
+        self.CYCLE_SECOND_OFFSET: int = CYCLE_SECOND_OFFSET
 
-    Utiliza padrão singleton — a instância global é `settings`.
-    """
+        self.DATA_DIR: Path = Path(os.getenv("CORTEX_DATA_DIR", str(PROJECT_ROOT / "data")))
+        self.KEYS_DIR: Path = Path(os.getenv("CORTEX_KEYS_DIR", str(self.DATA_DIR / ".keys")))
+        self.DB_PATH: Path = Path(os.getenv("CORTEX_DB_PATH", str(self.DATA_DIR / "cortex.db")))
+        self.LOG_DIR: Path = Path(os.getenv("LOG_DIR", str(PROJECT_ROOT / "logs")))
+        self.BACKUPS_DIR: Path = Path(os.getenv("CORTEX_BACKUPS_DIR", str(PROJECT_ROOT / "backups")))
 
-    _instance: "Settings | None" = None
+        for d in (self.DATA_DIR, self.KEYS_DIR, self.LOG_DIR, self.BACKUPS_DIR):
+            d.mkdir(parents=True, exist_ok=True)
 
-    def __new__(cls, **kwargs: object) -> "Settings":
-        """Garante instância única (singleton)."""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(
-        self,
-        simulation_mode: bool | None = None,
-        verbose: bool | None = None,
-        **kwargs: object,
-    ) -> None:
-        if self._initialized:
-            if simulation_mode is not None:
-                self.SIMULATION_MODE = simulation_mode
-            if verbose is not None:
-                self.VERBOSE = verbose
-            return
-        self._initialized = True
-        self.VERBOSE: bool = bool(verbose) if verbose is not None else False
-
-        self.PROJECT_ROOT: Final[Path] = _PROJECT_ROOT
-        self.VERSION: Final[str] = "2.9.1"
-
-        self.SIMULATION_MODE: bool = (
-            simulation_mode if simulation_mode is not None
-            else _env_bool("SIMULATION_MODE", default=True)
-        )
-        self.BROKER_MODE: str = os.getenv("BROKER_MODE", "simulator").strip().lower()
-
-        raw_cap = _env_float("CAPITAL_INICIAL", 1000000.00)
-        self.CAPITAL_INICIAL: float = raw_cap if raw_cap > 0 else 1000000.00
-        self.STOP_LOSS_PERCENT: float = _env_float("STOP_LOSS_PERCENT", 0.10)
-        self.MAX_POSITIONS: int = _env_int("MAX_POSITIONS", 0)
-        self.MAX_CONCENTRATION: float = _env_float("MAX_CONCENTRATION", 0.25)
-        self.MAX_DAILY_LOSS_PERCENT: float = _env_float("MAX_DAILY_LOSS_PERCENT", 0.03)
-        self.TRAILING_STOP_TRIGGER_PERCENT: float = _env_float("TRAILING_STOP_TRIGGER_PERCENT", 0.02)
-        self.TRAILING_STOP_DISTANCE_PERCENT: float = _env_float("TRAILING_STOP_DISTANCE_PERCENT", 0.015)
-        self.MAX_RISK_PER_TRADE_PERCENT: float = _env_float("MAX_RISK_PER_TRADE_PERCENT", 0.02)
-
-        # Microestrutura B3, Custos Operacionais, Proteção Tributária PF e Filtros Intraday (v2.9.0)
-        self.MAX_SPREAD_PERCENT: float = _env_float("MAX_SPREAD_PERCENT", 0.008)
-        self.MAX_SLIPPAGE_PERCENT: float = _env_float("MAX_SLIPPAGE_PERCENT", 0.003)
-        self.B3_FEE_RATE: float = _env_float("B3_FEE_RATE", 0.0003)
-        self.AVOID_DAY_TRADE_TAX: bool = _env_bool("AVOID_DAY_TRADE_TAX", default=True)
-        self.OPENING_COOLDOWN_MINUTES: int = _env_int("OPENING_COOLDOWN_MINUTES", 15)
-        self.MARKET_REGIME_MAX_DROP_PCT: float = _env_float("MARKET_REGIME_MAX_DROP_PCT", -1.5)
-        self.ENABLE_MTF_CONFIRMATION: bool = _env_bool("ENABLE_MTF_CONFIRMATION", default=True)
-        self.DECISION_RETENTION_DAYS: int = _env_int("DECISION_RETENTION_DAYS", 14)
-
-        self.SENTIMENT_MODE: str = os.getenv("SENTIMENT_MODE", "lightweight").strip().lower()
-        self.SENTIMENT_CACHE_TTL: int = _env_int("SENTIMENT_CACHE_TTL", 1800)
-
-        self.MT5_LOGIN: str = os.getenv("MT5_LOGIN", "")
-        self.MT5_PASSWORD: str = os.getenv("MT5_PASSWORD", "")
-        self.MT5_SERVER: str = os.getenv("MT5_SERVER", "ClearInvestimentos-CLEAR")
-        self.MT5_PATH: str = os.getenv(
-            "MT5_PATH",
-            r"C:\Program Files\MetaTrader 5\terminal64.exe",
-        )
-        self.MT5_MAGIC: int = _env_int("MT5_MAGIC", 234000)
-        self.MT5_BRIDGE_URL: str = os.getenv("MT5_BRIDGE_URL", "").strip()
-        self.BRIDGE_API_KEY: str = os.getenv("BRIDGE_API_KEY", "").strip()
-
-        self.TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "").strip()
-        self.TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-        self.TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
-
-        self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
-
-        self.DASHBOARD_HOST: str = os.getenv("DASHBOARD_HOST", "0.0.0.0")
-        self.DASHBOARD_PORT: int = _env_int("DASHBOARD_PORT", 8003)
-        self.ALLOWED_ORIGINS: str = os.getenv(
-            "ALLOWED_ORIGINS",
-            "http://localhost:8003,http://127.0.0.1:8003",
-        ).strip()
+        self.DASHBOARD_HOST: str = os.getenv("DASHBOARD_HOST", "0.0.0.0").strip() or "0.0.0.0"
+        self.DASHBOARD_PORT: int = _env_int("DASHBOARD_PORT", DEFAULT_PORT)
+        self.ALLOWED_ORIGINS: list[str] = [
+            o.strip().rstrip("/")
+            for o in os.getenv(
+                "ALLOWED_ORIGINS",
+                f"http://localhost:{self.DASHBOARD_PORT},http://127.0.0.1:{self.DASHBOARD_PORT}",
+            ).split(",")
+            if o.strip()
+        ]
         self.COOKIE_SECURE: bool = _env_bool("COOKIE_SECURE", default=False)
+        self.MAX_REQUEST_BODY_BYTES: int = _env_int("MAX_REQUEST_BODY_BYTES", 65536)
+
+        self.OWNER_USERNAME: str = OWNER_USERNAME
+        self.OWNER_USER_ID: int = OWNER_USER_ID
+        self.LUKE_BOOTSTRAP_PASSWORD: str = os.getenv("LUKE_BOOTSTRAP_PASSWORD", "Luke").strip() or "Luke"
 
         self.AUTH_MAX_IDLE_SECONDS: int = _env_int("AUTH_MAX_IDLE_SECONDS", 900)
         self.AUTH_MAX_SESSION_SECONDS: int = _env_int("AUTH_MAX_SESSION_SECONDS", 28800)
         self.AUTH_MAX_LOGIN_ATTEMPTS: int = _env_int("AUTH_MAX_LOGIN_ATTEMPTS", 5)
         self.AUTH_LOCKOUT_SECONDS: int = _env_int("AUTH_LOCKOUT_SECONDS", 900)
+        self.AUTH_MAX_CONCURRENT_SESSIONS: int = _env_int("AUTH_MAX_CONCURRENT_SESSIONS", 3)
+        self.STEP_UP_TTL_SECONDS: int = _env_int("STEP_UP_TTL_SECONDS", 180)
+        self.INVITE_EXPIRY_HOURS: int = _env_int("INVITE_EXPIRY_HOURS", 24)
 
-        self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
-        self.LOG_DIR: Path = _PROJECT_ROOT / os.getenv("LOG_DIR", "logs")
-        self.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        self.DEFAULT_SIM_CAPITAL: float = max(100.0, _env_float("CAPITAL_INICIAL", 100000.0))
+        self.STOP_LOSS_PERCENT: float = max(0.01, min(0.50, _env_float("STOP_LOSS_PERCENT", 0.10)))
+        self.TRAILING_STOP_TRIGGER_PERCENT: float = max(0.005, min(0.30, _env_float("TRAILING_STOP_TRIGGER_PERCENT", 0.02)))
+        self.TRAILING_STOP_DISTANCE_PERCENT: float = max(0.005, min(0.20, _env_float("TRAILING_STOP_DISTANCE_PERCENT", 0.015)))
+        if self.TRAILING_STOP_DISTANCE_PERCENT >= self.TRAILING_STOP_TRIGGER_PERCENT:
+            self.TRAILING_STOP_DISTANCE_PERCENT = round(self.TRAILING_STOP_TRIGGER_PERCENT * 0.75, 4)
 
-        self.DB_PATH: Path = _PROJECT_ROOT / "data" / "cortex.db"
-        self.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.MAX_CONCENTRATION: float = _env_float("MAX_CONCENTRATION", 0.25)
+        self.MAX_SECTOR_EXPOSURE: float = _env_float("MAX_SECTOR_EXPOSURE", 0.40)
+        self.MAX_DAILY_LOSS_PERCENT: float = _env_float("MAX_DAILY_LOSS_PERCENT", 0.03)
+        self.MAX_RISK_PER_TRADE_PERCENT: float = _env_float("MAX_RISK_PER_TRADE_PERCENT", 0.02)
+        self.MAX_SPREAD_PERCENT: float = _env_float("MAX_SPREAD_PERCENT", 0.008)
+        self.MAX_SLIPPAGE_PERCENT: float = _env_float("MAX_SLIPPAGE_PERCENT", 0.003)
+        self.B3_FEE_RATE: float = _env_float("B3_FEE_RATE", 0.0003)
+        self.AVOID_DAY_TRADE_TAX: bool = _env_bool("AVOID_DAY_TRADE_TAX", default=True)
+        self.PROTECT_B3_20K_EXEMPTION: bool = _env_bool("PROTECT_B3_20K_EXEMPTION", default=True)
+        self.B3_SWING_EXEMPTION_LIMIT: float = _env_float("B3_SWING_EXEMPTION_LIMIT", 20000.0)
+        self.B3_SWING_EXEMPTION_GUARD_BUFFER: float = _env_float("B3_SWING_EXEMPTION_GUARD_BUFFER", 19500.0)
 
-        self.TRADING_CYCLE_INTERVAL: int = _env_int("TRADING_CYCLE_INTERVAL", 60)
-        self.CLOSED_CHECK_INTERVAL: int = _env_int("CLOSED_CHECK_INTERVAL", 300)
-        self.HEALTH_CHECK_INTERVAL: int = _env_int("HEALTH_CHECK_INTERVAL", 120)
-        self.ALERT_COOLDOWN: int = _env_int("ALERT_COOLDOWN", 1800)
-        self.VOLATILITY_ALERT_THRESHOLD: float = _env_float(
-            "VOLATILITY_ALERT_THRESHOLD", 5.0,
-        )
-        self.NEWS_REQUEST_TIMEOUT: int = _env_int("NEWS_REQUEST_TIMEOUT", 15)
+        self.MAX_SINGLE_ORDER_NOTIONAL: float = _env_float("MAX_SINGLE_ORDER_NOTIONAL", 250000.0)
+        self.MAX_ORDERS_PER_MINUTE: int = max(2, _env_int("MAX_ORDERS_PER_MINUTE", 12))
+        self.STALE_QUOTE_MAX_SECONDS: int = max(15, _env_int("STALE_QUOTE_MAX_SECONDS", 90))
+        self.WALLET_EXECUTION_TIMEOUT_SECONDS: float = max(2.0, _env_float("WALLET_EXECUTION_TIMEOUT_SECONDS", 12.0))
+        self.OPENING_COOLDOWN_MINUTES: int = _env_int("OPENING_COOLDOWN_MINUTES", 15)
+        self.MARKET_REGIME_MAX_DROP_PCT: float = _env_float("MARKET_REGIME_MAX_DROP_PCT", -1.5)
+        self.ENABLE_MTF_CONFIRMATION: bool = _env_bool("ENABLE_MTF_CONFIRMATION", default=True)
 
-        self.min_quantity: int = _env_int("MIN_QUANTITY", 1)
-        self.max_quantity: int = _env_int("MAX_QUANTITY", 50000)
+        self.TRADING_CYCLE_INTERVAL: int = max(15, _env_int("TRADING_CYCLE_INTERVAL", DEFAULT_CYCLE_INTERVAL))
+        self.CLOSED_CHECK_INTERVAL: int = max(30, _env_int("CLOSED_CHECK_INTERVAL", 300))
+        self.HEALTH_CHECK_INTERVAL: int = max(30, _env_int("HEALTH_CHECK_INTERVAL", 120))
+        self.DECISION_RETENTION_DAYS: int = max(3, _env_int("DECISION_RETENTION_DAYS", 14))
+        self.NEWS_REQUEST_TIMEOUT: int = max(3, _env_int("NEWS_REQUEST_TIMEOUT", 12))
+        self.PRICE_CACHE_TTL: int = max(5, _env_int("PRICE_CACHE_TTL", 30))
+        self.OHLCV_CACHE_TTL: int = max(30, _env_int("OHLCV_CACHE_TTL", 300))
+        self.SENTIMENT_CACHE_TTL: int = max(60, _env_int("SENTIMENT_CACHE_TTL", 1800))
+        self.SENTIMENT_MODE: str = os.getenv("SENTIMENT_MODE", "lightweight").strip().lower() or "lightweight"
+        self.GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
 
-        self.price_cache_ttl_seconds: int = _env_int("PRICE_CACHE_TTL", 30)
-        self.ohlcv_cache_ttl_seconds: int = _env_int("OHLCV_CACHE_TTL", 300)
+        self.MT5_BRIDGE_URL: str = os.getenv("MT5_BRIDGE_URL", "http://127.0.0.1:5000").strip().rstrip("/")
+        self.BRIDGE_API_KEY: str = os.getenv("BRIDGE_API_KEY", "").strip()
+        self.MT5_LOGIN: str = os.getenv("MT5_LOGIN", "").strip()
+        self.MT5_PASSWORD: str = os.getenv("MT5_PASSWORD", "")
+        self.MT5_SERVER: str = os.getenv("MT5_SERVER", "ClearInvestimentos-CLEAR").strip()
+        self.MT5_MAGIC: int = _env_int("MT5_MAGIC", 234000)
 
-        self.simulator_state_path: Path = _PROJECT_ROOT / "data" / "simulator_state.json"
+        self.TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "").strip()
+        self.TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        raw_admins = os.getenv("TELEGRAM_ADMIN_USER_IDS", "").strip()
+        parsed_admins: set[int] = set()
+        for part in raw_admins.split(","):
+            p = part.strip()
+            if p.lstrip("-").isdigit():
+                val = int(p)
+                if val > 0:
+                    parsed_admins.add(val)
+        if not parsed_admins and self.TELEGRAM_CHAT_ID.isdigit():
+            parsed_admins.add(int(self.TELEGRAM_CHAT_ID))
+        self.TELEGRAM_ADMIN_USER_IDS: frozenset[int] = frozenset(parsed_admins)
 
-        self.B3_PORTFOLIOS: Final[dict[str, list[str]]] = {
-            "IBOV": [
-                "PETR4", "VALE3", "ITUB4", "BBDC4", "BBAS3", "WEGE3", "RENT3", "ABEV3",
-                "MGLU3", "SUZB3", "PRIO3", "B3SA3", "RDOR3", "VIVT3", "CSAN3", "GGBR4",
-                "CSNA3", "TOTS3", "BPAC11", "CMIG4", "SBSP3", "HAPV3", "EQTL3", "RADL3",
-                "LREN3", "BEEF3", "KLBN11", "SANB11", "BBSE3", "CXSE3", "TIMS3", "CPFE3",
-                "EGIE3", "TAEE11", "ALOS3", "MULT3", "IGTI11", "CYRE3", "EZTC3", "MRVE3",
-                "LWSA3", "CASH3", "COGN3", "YDUQ3", "CMIN3", "ENEV3", "SMTO3", "SLCE3",
-                "RAIZ4", "DXCO3", "BRKM5", "RAIL3", "HYPE3", "FLRY3", "ASAI3", "AZZA3",
-                "VIVA3", "PETR3", "BBDC3", "ITSA4", "UGPA3", "VBBR3", "USIM5", "GOAU4",
-                "RECV3", "BRAV3", "EMBJ3", "AXIA3", "CPLE3", "ISAE4",
-                "MBRF3", "NATU3", "ALPA4", "MOTV3",
-                "ECOR3", "MATD3", "SIMH3", "MOVI3", "VAMO3",
-                "SMFT3", "TFCO4", "RIAA3", "SBFG3", "CBAV3", "ARML3", "ORVR3",
-            ],
-            "IDIV": [
-                "BBAS3", "TAEE11", "CMIG4", "EGIE3", "VIVT3", "BBSE3", "CXSE3", "SANB11",
-                "ITSA4", "PSSA3", "CSMG3", "SAPR11", "ALUP11", "UNIP6", "FESA4", "KEPL3",
-                "LEVE3", "VALE3", "PETR4", "BBDC4", "ITUB4", "ISAE4", "CPLE3",
-                "TIMS3",
-            ],
-            "SMLL": [
-                "POMO4", "KEPL3", "LEVE3", "TUPY3", "UNIP6", "POSI3", "RANI3", "MYPK3",
-                "WIZC3", "ROMI3", "SHUL4", "TGMA3", "LOGN3", "TEND3", "DIRR3", "CURY3",
-                "PLPL3", "LAVV3", "TRIS3", "JHSF3", "LOGG3", "EVEN3", "BLAU3",
-                "ANIM3", "SEER3", "INTB3", "BMOB3", "MDIA3", "CAML3", "AURA33",
-                "SMFT3", "TFCO4", "RIAA3", "SBFG3", "CBAV3", "ARML3", "ORVR3",
-                "MOVI3", "VAMO3", "SIMH3",
-            ],
-            "BDRS": [
-                "NVDC34", "AAPL34", "MSFT34", "AMZO34", "GOGL34", "M1TA34", "TSLA34",
-                "AVGO34", "TSMC34", "A1MD34", "BERK34", "JPMC34", "VISA34", "DISB34",
-                "COCA34", "MCDC34", "NFLX34", "BABA34", "MELI34", "ASML34", "JBSS32",
-            ],
-            "ETFS": [
-                "IVVB11", "NASD11", "BOVA11", "SMAL11", "GOLD11", "HASH11",
-            ],
+        self.LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+
+        self.B3_PORTFOLIOS: dict[str, list[str]] = {
+            **B3_PORTFOLIOS,
+            "ALL": list(ALL_B3_TICKERS),
         }
-
-        all_unique: list[str] = []
-        for p_list in self.B3_PORTFOLIOS.values():
-            for t in p_list:
-                if t not in all_unique:
-                    all_unique.append(t)
-        self.B3_PORTFOLIOS["ALL"] = all_unique
-
-        custom_watchlist = os.getenv("WATCHLIST", "").strip()
+        custom_wl = os.getenv("WATCHLIST", "").strip()
         portfolio_mode = os.getenv("WATCHLIST_PORTFOLIO", "ALL").strip().upper()
-
-        if custom_watchlist:
-            seen_wl: list[str] = []
-            for raw_t in custom_watchlist.split(","):
-                clean_t = raw_t.strip().upper()
-                if clean_t and clean_t not in seen_wl:
-                    seen_wl.append(clean_t)
-            self.WATCHLIST = seen_wl
+        if custom_wl:
+            seen: list[str] = []
+            for item in custom_wl.split(","):
+                t = item.strip().upper()
+                if t and t not in seen:
+                    seen.append(t)
+            self.WATCHLIST: list[str] = seen
         elif portfolio_mode in self.B3_PORTFOLIOS:
             self.WATCHLIST = list(self.B3_PORTFOLIOS[portfolio_mode])
         else:
-            self.WATCHLIST = list(self.B3_PORTFOLIOS["ALL"])
-
-        self.YFINANCE_SUFFIX_MAP: Final[dict[str, str]] = {
-            ticker: f"{ticker}.SA" for ticker in self.WATCHLIST
-        }
-
-        self.SECTOR_MAP: Final[dict[str, str]] = {
-            "PETR4": "Petróleo e Gás", "PETR3": "Petróleo e Gás", "PRIO3": "Petróleo e Gás",
-            "RECV3": "Petróleo e Gás", "UGPA3": "Petróleo e Gás", "CSAN3": "Petróleo e Gás",
-            "RAIZ4": "Petróleo e Gás", "BRAV3": "Petróleo e Gás", "VBBR3": "Petróleo e Gás",
-
-            "VALE3": "Siderurgia e Mineração", "GGBR4": "Siderurgia e Mineração",
-            "GOAU4": "Siderurgia e Mineração", "CSNA3": "Siderurgia e Mineração",
-            "USIM5": "Siderurgia e Mineração", "CMIN3": "Siderurgia e Mineração",
-            "UNIP6": "Química", "BRKM5": "Química", "FESA4": "Siderurgia e Mineração",
-            "CBAV3": "Siderurgia e Mineração",
-
-            "ITUB4": "Financeiro", "BBDC4": "Financeiro", "BBDC3": "Financeiro",
-            "BBAS3": "Financeiro", "SANB11": "Financeiro", "BPAC11": "Financeiro",
-            "B3SA3": "Financeiro", "BBSE3": "Seguros", "CXSE3": "Seguros",
-            "PSSA3": "Seguros", "ITSA4": "Financeiro", "WIZC3": "Seguros",
-
-            "WEGE3": "Bens Industriais", "EMBJ3": "Bens Industriais", "EMBR3": "Bens Industriais", "KEPL3": "Bens Industriais",
-            "TUPY3": "Bens Industriais", "SHUL4": "Bens Industriais", "ROMI3": "Bens Industriais",
-            "POMO4": "Bens Industriais", "MYPK3": "Bens Industriais", "LEVE3": "Bens Industriais",
-            "ARML3": "Bens Industriais",
-
-            "AXIA3": "Elétricas", "CPLE3": "Elétricas", "ELET3": "Elétricas", "ELET6": "Elétricas", "CPLE6": "Elétricas",
-            "CMIG4": "Elétricas", "EGIE3": "Elétricas", "TAEE11": "Elétricas",
-            "TRPL4": "Elétricas", "ISAE4": "Elétricas", "EQTL3": "Elétricas", "ENEV3": "Elétricas",
-            "CPFE3": "Elétricas", "NEOE3": "Elétricas", "SBSP3": "Saneamento",
-            "SAPR11": "Saneamento", "CSMG3": "Saneamento", "ALUP11": "Elétricas",
-            "ORVR3": "Saneamento", "AMBP3": "Saneamento",
-
-            "MGLU3": "Varejo", "LREN3": "Varejo", "AZZA3": "Varejo", "ARZZ3": "Varejo", "SOMA3": "Varejo",
-            "VIVA3": "Varejo", "ALPA4": "Varejo", "ABEV3": "Bebidas", "JBSS3": "Alimentos", "JBSS32": "Alimentos",
-            "MBRF3": "Alimentos", "BRFS3": "Alimentos", "MRFG3": "Alimentos", "BEEF3": "Alimentos",
-            "SMTO3": "Agro", "SLCE3": "Agro", "ASAI3": "Varejo", "CRFB3": "Varejo",
-            "NTCO3": "Cosméticos", "NATU3": "Cosméticos", "MDIA3": "Alimentos", "CAML3": "Alimentos",
-            "SMFT3": "Serviços", "TFCO4": "Varejo", "RIAA3": "Varejo", "GUAR3": "Varejo", "SBFG3": "Varejo",
-
-            "CYRE3": "Construção", "EZTC3": "Construção", "MRVE3": "Construção",
-            "DIRR3": "Construção", "CURY3": "Construção", "PLPL3": "Construção",
-            "TEND3": "Construção", "LAVV3": "Construção", "TRIS3": "Construção",
-            "JHSF3": "Construção", "MULT3": "Shoppings", "ALOS3": "Shoppings",
-            "IGTI11": "Shoppings", "LOGG3": "Logística", "EVEN3": "Construção",
-
-            "RDOR3": "Saúde", "HAPV3": "Saúde", "RADL3": "Saúde", "HYPE3": "Farmacêutica",
-            "FLRY3": "Saúde", "ODPV3": "Saúde", "MATD3": "Saúde", "PARD3": "Saúde",
-            "BLAU3": "Farmacêutica", "VVEO3": "Saúde",
-
-            "TOTS3": "Tecnologia", "VIVT3": "Telecom", "TIMS3": "Telecom",
-            "LWSA3": "Tecnologia", "POSI3": "Tecnologia", "CASH3": "Tecnologia",
-            "INTB3": "Tecnologia", "BMOB3": "Tecnologia",
-
-            "RENT3": "Locação", "RAIL3": "Transporte", "RUMO3": "Transporte",
-            "CCRO3": "Concessões", "MOTV3": "Concessões", "ECOR3": "Concessões", "STBP3": "Portos",
-            "TGMA3": "Transporte", "LOGN3": "Transporte", "AZUL4": "Aéreo",
-            "GOLL4": "Aéreo", "SIMH3": "Locação", "MOVI3": "Locação", "VAMO3": "Locação",
-
-            "SUZB3": "Papel e Celulose", "KLBN11": "Papel e Celulose",
-            "RANI3": "Papel e Celulose", "DXCO3": "Madeira e Painéis",
-
-            "YDUQ3": "Educação", "COGN3": "Educação", "ANIM3": "Educação",
-            "SEER3": "Educação",
-
-            "AURA33": "Mineração",
-
-            # BDRs Internacionais
-            "NVDC34": "Tecnologia Global", "AAPL34": "Tecnologia Global",
-            "MSFT34": "Tecnologia Global", "AMZO34": "Tecnologia Global",
-            "GOGL34": "Tecnologia Global", "M1TA34": "Tecnologia Global", "META34": "Tecnologia Global",
-            "TSLA34": "Tecnologia Global", "AVGO34": "Tecnologia Global",
-            "TSMC34": "Tecnologia Global", "A1MD34": "Tecnologia Global", "AMD34": "Tecnologia Global",
-            "BERK34": "Financeiro Global", "JPMC34": "Financeiro Global",
-            "VISA34": "Financeiro Global", "DISB34": "Consumo Global",
-            "COCA34": "Consumo Global", "MCDC34": "Consumo Global",
-            "NFLX34": "Tecnologia Global", "BABA34": "Tecnologia Global",
-            "MELI34": "Tecnologia Global", "ASML34": "Tecnologia Global",
-
-            # ETFs
-            "IVVB11": "ETF Internacional", "NASD11": "ETF Internacional",
-            "BOVA11": "ETF Brasil", "SMAL11": "ETF Brasil",
-            "GOLD11": "ETF Commodities", "HASH11": "ETF Cripto",
-        }
-        self.MAX_SECTOR_EXPOSURE: Final[float] = 0.40
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        super().__setattr__(name, value)
-        if not name.startswith("_"):
-            upper = name.upper()
-            if upper != name:
-                super().__setattr__(upper, value)
-            lower = name.lower()
-            if lower != name:
-                super().__setattr__(lower, value)
-
-    def __repr__(self) -> str:
-        mode = "HOMOLOGAÇÃO" if self.SIMULATION_MODE else "PRODUÇÃO"
-        return (
-            f"Settings(mode={mode}, capital=R${self.CAPITAL_INICIAL:.2f}, "
-            f"stop_loss={self.STOP_LOSS_PERCENT:.0%}, "
-            f"watchlist={len(self.WATCHLIST)} ativos, "
-            f"sentiment={self.SENTIMENT_MODE})"
-        )
-
-    def reload_dynamic_config(
-        self,
-        db: Any = None,
-        reload_environment: bool = True,
-    ) -> None:
-        try:
-            if db is None:
-                from data.database import DatabaseManager
-                db = DatabaseManager(self.DB_PATH)
-            configs = db.get_all_configs()
-
-            if "stop_loss_percent" in configs:
-                try:
-                    val = float(configs["stop_loss_percent"])
-                    if not math.isfinite(val):
-                        raise ValueError("valor não finito")
-                    if not (0.01 <= val <= 0.50):
-                        logger.warning(
-                            "Configuração stop_loss_percent fora dos limites (%.4f) — ajustando para [0.01, 0.50]",
-                            val,
-                        )
-                    self.STOP_LOSS_PERCENT = max(0.01, min(0.50, val))
-                except (ValueError, TypeError) as exc:
-                    logger.warning(
-                        "Valor inválido para stop_loss_percent (%r): %s",
-                        configs["stop_loss_percent"], exc,
-                    )
-
-            if "trailing_trigger_percent" in configs:
-                try:
-                    val = float(configs["trailing_trigger_percent"])
-                    if not math.isfinite(val):
-                        raise ValueError("valor não finito")
-                    if not (0.005 <= val <= 0.30):
-                        logger.warning(
-                            "Configuração trailing_trigger_percent fora dos limites (%.4f) — ajustando para [0.005, 0.30]",
-                            val,
-                        )
-                    self.TRAILING_STOP_TRIGGER_PERCENT = max(0.005, min(0.30, val))
-                except (ValueError, TypeError) as exc:
-                    logger.warning(
-                        "Valor inválido para trailing_trigger_percent (%r): %s",
-                        configs["trailing_trigger_percent"], exc,
-                    )
-
-            if "trailing_distance_percent" in configs:
-                try:
-                    val = float(configs["trailing_distance_percent"])
-                    if not math.isfinite(val):
-                        raise ValueError("valor não finito")
-                    if not (0.005 <= val <= 0.20):
-                        logger.warning(
-                            "Configuração trailing_distance_percent fora dos limites (%.4f) — ajustando para [0.005, 0.20]",
-                            val,
-                        )
-                    self.TRAILING_STOP_DISTANCE_PERCENT = max(0.005, min(0.20, val))
-                except (ValueError, TypeError) as exc:
-                    logger.warning(
-                        "Valor inválido para trailing_distance_percent (%r): %s",
-                        configs["trailing_distance_percent"], exc,
-                    )
-
-            if self.TRAILING_STOP_DISTANCE_PERCENT >= self.TRAILING_STOP_TRIGGER_PERCENT:
-                fallback_dist = (
-                    round(max(0.001, self.TRAILING_STOP_TRIGGER_PERCENT * 0.8), 4)
-                    if self.TRAILING_STOP_TRIGGER_PERCENT <= 0.005
-                    else round(max(0.005, self.TRAILING_STOP_TRIGGER_PERCENT * 0.8), 4)
-                )
-                logger.warning(
-                    "trailing_distance_percent (%.4f) >= trailing_trigger_percent (%.4f) — ajustando distância para %.4f",
-                    self.TRAILING_STOP_DISTANCE_PERCENT,
-                    self.TRAILING_STOP_TRIGGER_PERCENT,
-                    fallback_dist,
-                )
-                self.TRAILING_STOP_DISTANCE_PERCENT = fallback_dist
-
-            cap_key = (
-                "sim_initial_capital"
-                if "sim_initial_capital" in configs
-                else ("simulation_initial_capital" if "simulation_initial_capital" in configs else None)
-            )
-            if cap_key is not None:
-                try:
-                    cap_val = float(configs[cap_key])
-                    if not math.isfinite(cap_val) or cap_val <= 0:
-                        raise ValueError("capital inicial deve ser finito e > 0")
-                    self.CAPITAL_INICIAL = cap_val
-                except (ValueError, TypeError) as exc:
-                    logger.warning(
-                        "Valor inválido para %s (%r): %s",
-                        cap_key, configs[cap_key], exc,
-                    )
-
-            if reload_environment and "environment" in configs:
-                self.SIMULATION_MODE = (str(configs["environment"]).strip().lower() == "homologation")
-                self.BROKER_MODE = "simulator" if self.SIMULATION_MODE else "mt5"
-        except Exception as exc:
-            logger.warning("Falha ao recarregar configuração dinâmica: %s", exc)
-
-    def get_dynamic_config(self) -> dict[str, Any]:
-        self.reload_dynamic_config()
-        return {
-            "environment": "homologation" if self.SIMULATION_MODE else "production",
-            "simulation_mode": self.SIMULATION_MODE,
-            "broker_mode": self.BROKER_MODE,
-            "stop_loss_percent": self.STOP_LOSS_PERCENT,
-            "trailing_trigger_percent": self.TRAILING_STOP_TRIGGER_PERCENT,
-            "trailing_distance_percent": self.TRAILING_STOP_DISTANCE_PERCENT,
-            "capital_inicial": self.CAPITAL_INICIAL,
-        }
+            self.WATCHLIST = list(ALL_B3_TICKERS)
+        self.SECTOR_MAP: dict[str, str] = dict(SECTOR_MAP)
 
 
-settings: Final[Settings] = Settings()
+settings = Settings()

@@ -1,0 +1,27 @@
+[Unit]
+Description=Cortex IA B3 Autonomous Trading System
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=servico
+Group=servico
+WorkingDirectory=/home/servico/cortex-ia
+EnvironmentFile=-/home/servico/cortex-ia/.env
+ExecStart=/home/servico/cortex-ia/.venv/bin/python /home/servico/cortex-ia/main.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+UMask=0077
+LimitNOFILE=65535
+ReadWritePaths=/home/servico/cortex-ia/data /home/servico/cortex-ia/logs /home/servico/cortex-ia/backups /LOGS-PROJETOS/cortex-ia
+
+[Install]
+WantedBy=multi-user.target

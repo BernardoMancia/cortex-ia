@@ -1,0 +1,185 @@
+Patrimonio Total Atual =
+VAR LastSnapId = MAX('fact_equity'[id])
+RETURN
+CALCULATE(
+    SUM('fact_equity'[total_equity]),
+    'fact_equity'[id] = LastSnapId
+)
+
+Patrimonio Operacional Atual =
+VAR LastSnapId = MAX('fact_equity'[id])
+RETURN
+CALCULATE(
+    SUM('fact_equity'[operational_equity]),
+    'fact_equity'[id] = LastSnapId
+)
+
+Caixa Livre Atual =
+VAR LastSnapId = MAX('fact_equity'[id])
+RETURN
+CALCULATE(
+    SUM('fact_equity'[free_cash]),
+    'fact_equity'[id] = LastSnapId
+)
+
+Cofre Protegido Atual =
+VAR LastSnapId = MAX('fact_equity'[id])
+RETURN
+CALCULATE(
+    SUM('fact_equity'[vault_reserve_cash]),
+    'fact_equity'[id] = LastSnapId
+)
+
+Capital Alocado Custodia =
+SUM('fact_positions'[market_value])
+
+Poder de Compra IA =
+MAX('kpi_summary'[buying_power])
+
+PnL Nao Realizado =
+SUM('fact_positions'[unrealized_pnl])
+
+PnL Realizado Acumulado =
+CALCULATE(
+    SUM('fact_trades'[realized_pnl]),
+    'fact_trades'[action] = "SELL"
+)
+
+PnL Total Consolidado =
+[PnL Realizado Acumulado] + [PnL Nao Realizado]
+
+Taxas B3 Acumuladas =
+SUM('fact_trades'[fee])
+
+Retorno Acumulado Pct =
+DIVIDE(
+    MAX('kpi_summary'[cumulative_return_pct]),
+    100.0,
+    0.0
+)
+
+Retorno Diario Pct =
+DIVIDE(
+    MAX('kpi_summary'[daily_return_pct]),
+    100.0,
+    0.0
+)
+
+High Water Mark =
+MAX('fact_equity'[high_water_mark])
+
+Drawdown Atual Pct =
+VAR LastSnapId = MAX('fact_equity'[id])
+VAR RawDd =
+    CALCULATE(
+        MIN('fact_equity'[drawdown_pct]),
+        'fact_equity'[id] = LastSnapId
+    )
+RETURN
+DIVIDE(RawDd, 100.0, 0.0)
+
+Max Drawdown Historico Pct =
+DIVIDE(
+    MIN('fact_equity'[drawdown_pct]),
+    100.0,
+    0.0
+)
+
+Sharpe Anualizado =
+AVERAGE('kpi_summary'[sharpe_annualized])
+
+Sortino Anualizado =
+AVERAGE('kpi_summary'[sortino_annualized])
+
+Calmar Ratio =
+AVERAGE('kpi_summary'[calmar_ratio])
+
+Volatilidade Anualizada Pct =
+DIVIDE(
+    AVERAGE('kpi_summary'[volatility_annualized_pct]),
+    100.0,
+    0.0
+)
+
+Total Ordens Executadas =
+COUNTROWS('fact_trades')
+
+Total Compras Executadas =
+CALCULATE(
+    COUNTROWS('fact_trades'),
+    'fact_trades'[action] = "BUY"
+)
+
+Total Vendas Executadas =
+CALCULATE(
+    COUNTROWS('fact_trades'),
+    'fact_trades'[action] = "SELL"
+)
+
+Win Rate Vendas Pct =
+VAR TotalSells = [Total Vendas Executadas]
+VAR WinSells =
+    CALCULATE(
+        COUNTROWS('fact_trades'),
+        'fact_trades'[action] = "SELL",
+        'fact_trades'[realized_pnl] > 0
+    )
+RETURN
+DIVIDE(WinSells, TotalSells, 0.0)
+
+Profit Factor =
+VAR GrossWins =
+    CALCULATE(
+        SUM('fact_trades'[realized_pnl]),
+        'fact_trades'[action] = "SELL",
+        'fact_trades'[realized_pnl] > 0
+    )
+VAR GrossLosses =
+    ABS(
+        CALCULATE(
+            SUM('fact_trades'[realized_pnl]),
+            'fact_trades'[action] = "SELL",
+            'fact_trades'[realized_pnl] < 0
+        )
+    )
+RETURN
+DIVIDE(GrossWins, GrossLosses, 0.0)
+
+Payoff Ratio =
+AVERAGE('kpi_summary'[payoff_ratio])
+
+Expectativa Matematica BRL =
+AVERAGE('kpi_summary'[expectancy_brl])
+
+Vendas Mes Isencao 20k BRL =
+MAX('kpi_summary'[tax_sold_month_brl])
+
+Margem Isenta 20k Restante BRL =
+MAX('kpi_summary'[tax_remaining_exempt_brl])
+
+Utilizacao Cota 20k Pct =
+DIVIDE(
+    MAX('kpi_summary'[tax_utilization_pct]),
+    100.0,
+    0.0
+)
+
+Saldo Pendente Liquidacao D2 BRL =
+CALCULATE(
+    SUM('fact_cashflow_d2'[amount]),
+    'fact_cashflow_d2'[entry_kind] = "D2_SETTLEMENT",
+    'fact_cashflow_d2'[settled] = FALSE()
+)
+
+Confianca Media Decisoes IA Pct =
+DIVIDE(
+    AVERAGE('fact_decisions'[confidence_pct]),
+    100.0,
+    0.0
+)
+
+Posicoes Protegidas Manualmente =
+CALCULATE(
+    COUNTROWS('fact_positions'),
+    'fact_positions'[do_not_touch] = TRUE()
+)

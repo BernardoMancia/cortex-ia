@@ -1,0 +1,89 @@
+{
+  "name": "Cortex IA Dark Institucional B3",
+  "dataColors": [
+    "#10B981",
+    "#3B82F6",
+    "#F59E0B",
+    "#EF4444",
+    "#8B5CF6",
+    "#06B6D4",
+    "#EC4899",
+    "#14B8A6",
+    "#6366F1",
+    "#84CC16"
+  ],
+  "background": "#0A0E17",
+  "foreground": "#F9FAFB",
+  "tableAccent": "#10B981",
+  "good": "#10B981",
+  "neutral": "#F59E0B",
+  "bad": "#EF4444",
+  "maximum": "#10B981",
+  "center": "#3B82F6",
+  "minimum": "#EF4444",
+  "null": "#6B7280",
+  "textClasses": {
+    "callout": {
+      "fontSize": 26,
+      "fontFace": "Segoe UI Semibold",
+      "color": "#F9FAFB"
+    },
+    "title": {
+      "fontSize": 13,
+      "fontFace": "Segoe UI Semibold",
+      "color": "#E5E7EB"
+    },
+    "header": {
+      "fontSize": 11,
+      "fontFace": "Segoe UI Semibold",
+      "color": "#9CA3AF"
+    },
+    "label": {
+      "fontSize": 10,
+      "fontFace": "Segoe UI",
+      "color": "#D1D5DB"
+    }
+  },
+  "visualStyles": {
+    "*": {
+      "*": {
+        "background": [
+          {
+            "show": true,
+            "color": { "solid": { "color": "#111827" } },
+            "transparency": 0
+          }
+        ],
+        "border": [
+          {
+            "show": true,
+            "color": { "solid": { "color": "#1F2937" } },
+            "radius": 10
+          }
+        ],
+        "visualHeader": [
+          {
+            "background": { "solid": { "color": "#111827" } },
+            "foreground": { "solid": { "color": "#9CA3AF" } },
+            "border": { "solid": { "color": "#1F2937" } }
+          }
+        ]
+      }
+    },
+    "page": {
+      "*": {
+        "background": [
+          {
+            "color": { "solid": { "color": "#0A0E17" } },
+            "transparency": 0
+          }
+        ],
+        "outspace": [
+          {
+            "color": { "solid": { "color": "#070A10" } }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Acesso Seguro — Córtex IA B3</title>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cockpit.css">
+  <link rel="stylesheet" href="/static/css/modals.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand-lockup" style="margin-bottom: 20px;">
+      <span class="brand-mark">CX</span>
+      <div>
+        <div class="brand-title">Córtex IA Quantitativo</div>
+        <div class="brand-version">Autenticação Blindada B3</div>
+      </div>
+    </div>
+
+    <div id="login-error-box" class="danger-callout" hidden></div>
+    <div id="login-info-box" class="info-callout" hidden></div>
+
+    <form id="login-form" autocomplete="on">
+      <div class="field-group">
+        <label class="field-label" for="login-username">Usuário</label>
+        <input id="login-username" name="username" type="text" class="field-input" required autocomplete="username" placeholder="Seu usuário de acesso">
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="login-password">Senha</label>
+        <input id="login-password" name="password" type="password" class="field-input" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+
+      <div id="totp-step-box" hidden>
+        <div class="field-group" id="totp-digit-group">
+          <label class="field-label" for="login-totp">Código Autenticador 2FA (6 dígitos)</label>
+          <input id="login-totp" name="totp_code" type="text" inputmode="numeric" maxlength="6" class="field-input text-mono" autocomplete="one-time-code" placeholder="000000">
+        </div>
+        <div class="field-group" id="recovery-code-group" hidden>
+          <label class="field-label" for="login-recovery">Código de Recuperação 2FA</label>
+          <input id="login-recovery" name="recovery_code" type="text" maxlength="16" class="field-input text-mono" placeholder="XXXX-XXXX">
+        </div>
+        <button type="button" id="toggle-recovery-btn" class="btn btn-sm" style="margin-bottom: 12px;">Usar código de recuperação</button>
+      </div>
+
+      <button type="submit" id="login-submit-btn" class="btn btn-primary" style="width: 100%; padding: 10px;">Entrar no Cockpit</button>
+    </form>
+
+    <form id="first-login-form" hidden>
+      <div class="info-callout">
+        Primeiro acesso detectado. Defina sua senha definitiva forte (mínimo 8 caracteres com letras e números/símbolos) para liberar o Cockpit.
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="first-new-password">Nova Senha Definitiva</label>
+        <input id="first-new-password" type="password" class="field-input" required minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres">
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="first-confirm-password">Confirmar Nova Senha</label>
+        <input id="first-confirm-password" type="password" class="field-input" required minlength="8" autocomplete="new-password" placeholder="Repita a nova senha">
+      </div>
+
+      <button type="submit" id="first-login-submit-btn" class="btn btn-emerald" style="width: 100%; padding: 10px;">Salvar Nova Senha e Acessar</button>
+    </form>
+  </main>
+  <script src="/static/js/login.js"></script>
+</body>
+</html>
